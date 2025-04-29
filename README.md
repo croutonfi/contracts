@@ -11,7 +11,7 @@
 
 ## Audit
 
-The Crouton contracts have been audited by Quantstamp. You can read the full audit report here: [certificate](https://certificate.quantstamp.com/full/crouton-finance-stable-swap/14a85512-535f-4145-bbe9-1069ef8ce9a9).
+The Crouton contracts have been audited by Quantstamp. You can read the full audit report here: [certificate](https://certificate.quantstamp.com/full/crouton-finance-stable-swap/14a85512-535f-4145-bbe9-1069ef8ce9a9/index.html).
 
 *The version of the contract code matches the GitHub commit `3e00046d9aa6266e51c6e11a114426e421eee9fc` from the original repository.*
 
