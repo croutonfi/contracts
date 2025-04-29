@@ -1,0 +1,39 @@
+;; Methods for serializing and deserializing assets
+
+cell serialize_liquidity_deposit_assets(tuple tokens, tuple balances) {
+    cell tail = null();
+
+    repeat (tlen(tokens)) {
+        tail = begin_cell()
+            .store_slice(tokens~tpop())
+            .store_coins(balances~tpop())
+            .store_maybe_ref(tail)
+            .end_cell();
+    }
+
+    return tail;
+}
+
+
+(tuple, tuple) deserialize_liquidity_deposit_assets(cell assets) {
+    tuple tokens = empty_tuple();
+    tuple balances = empty_tuple();
+
+    if(assets.cell_null?() == true) {
+        return (tokens, balances);
+    }
+
+    cell next_asset = assets;
+
+    while(~(next_asset.cell_null?())) {
+        slice as = next_asset.begin_parse();
+
+        tokens~tpush(as~load_token());
+        balances~tpush(as~load_coins());
+
+        next_asset = as~load_maybe_ref();
+    }
+
+    return (tokens, balances);
+}
+

@@ -1,0 +1,100 @@
+;; Methods for serializing and deserializing assets
+
+(cell) serialize_pool_rates(tuple rates) {
+    cell result = new_dict();
+
+    int i = 0;
+    while (i < rates.tlen()) {
+        builder vs = begin_cell()
+            .store_uint(rates.at(i), 128);
+
+        result~udict_set_builder(32, i, vs);
+        i += 1;
+    }
+
+    return result;
+}
+
+(tuple) deserialize_pool_rates(cell rates) {
+    tuple result = empty_tuple();
+
+    (int key, slice vs, int flag) = rates.udict_get_min?(32);
+
+    while (flag) {
+        result~tpush(vs.preload_uint(128));
+
+        (key, vs, flag) = rates.udict_get_next?(32, key);
+    }
+
+    return result;
+}
+
+cell serialize_pool_assets(tuple tokens, tuple precisions, tuple balances, tuple admin_fees) {
+    cell tail = null();
+
+    repeat (tlen(tokens)) {
+        tail = begin_cell()
+            .store_slice(tokens~tpop())
+            .store_coins(precisions~tpop())
+            .store_coins(balances~tpop())
+            .store_coins(admin_fees~tpop())
+            .store_maybe_ref(tail)
+            .end_cell();
+    }
+
+    return tail;
+}
+
+
+(tuple, tuple, tuple, tuple) deserialize_pool_assets(cell assets) {
+    tuple tokens = empty_tuple();
+    tuple precisions = empty_tuple();
+    tuple balances = empty_tuple();
+    tuple admin_fees = empty_tuple();
+
+    cell next_asset = assets;
+
+    while(~(next_asset.cell_null?())) {
+        slice as = next_asset.begin_parse();
+
+        tokens~tpush(as~load_token());
+        precisions~tpush(as~load_coins());
+        balances~tpush(as~load_coins());
+        admin_fees~tpush(as~load_coins());
+
+        next_asset = as~load_maybe_ref();
+    }
+
+    return (tokens, precisions, balances, admin_fees);
+}
+
+;; Methods for serializing and deserializing amounts
+cell serialize_amounts(tuple amounts) {
+    cell tail = null();
+
+    repeat (tlen(amounts)) {
+        tail = begin_cell()
+            .store_slice(amounts~tpop())
+            .store_maybe_ref(tail)
+            .end_cell();
+    }
+
+    return tail;
+}
+
+
+tuple deserialize_amounts(cell amounts) {
+    tuple result = empty_tuple();
+
+    cell next_amount = amounts;
+
+    while(~(next_amount.cell_null?())) {
+        slice as = next_amount.begin_parse();
+        result~tpush(as~load_coins());
+
+        next_amount = as~load_maybe_ref();
+    }
+
+    return result;
+}
+

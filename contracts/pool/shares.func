@@ -1,0 +1,29 @@
+#include "../lib/stdlib.func";
+#include "../lib/error-codes.func";
+#include "../lib/op-codes.func";
+#include "../lib/params.func";
+#include "../lib/messages.func";
+#include "../lib/gas.func";
+
+() mint_shares(int query_id, slice to_address, int token_amount) impure {
+    cell msg_body = begin_cell()
+                .store_op(op::internal_transfer)
+                .store_query_id(query_id)
+                .store_coins(token_amount) ;; max 124 bit
+                .store_uint(0, 2) ;; from_address, addr_none$00
+                .store_slice(to_address) ;; response_address, 3 + 8 + 256 = 267 bit
+                .store_coins(0) ;; forward_amount, 4 bit if zero ?? we don't want to send
+                .store_uint(0, 1) ;; no forward_payload, 1 bit
+                .end_cell();
+
+    cell state_init = calculate_jetton_wallet_state_init(to_address, my_address(), storage::shares_wallet_code);
+    slice to_wallet_address = calc_address(state_init);
+
+    var msg = begin_cell()
+            .store_msg_flag(msg_flag::bounceable)
+            .store_slice(to_wallet_address)
+            .store_coins(0)
+            .store_msgbody_prefix_stateinit(state_init, msg_body);
+
+    send_raw_message(msg.end_cell(), CARRY_REMAINING_GAS);
+}

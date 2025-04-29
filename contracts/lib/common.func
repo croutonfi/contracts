@@ -1,0 +1,133 @@
+#include "./tokens.func";
+
+;; contract types
+const int type::vault = 1;
+const int type::pool = 2;
+const int type::liquidity_deposit = 3;
+
+;; blank contract magic
+;; these are hex representations of code cell which can be obtained by compiling blank-contract code
+const slice BLANK_CONTRACT_CELL1 = "FF00F4A413F4BCF2C80B"s;
+const slice BLANK_CONTRACT_CELL2 = "D301D0D30331ED44D001FA403001FA4030C705F2E193D31F018210BE5A7595BA8E2BD33F0130D401FB04F40430206EB38E18C8801001CB05F828CF1670FA02017158CB6ACCC98040FB009130E2E030840FF2F0"s;
+
+cell blank_contract_code_cell() inline {
+    return begin_cell()
+    .store_slice(BLANK_CONTRACT_CELL1)
+    .store_ref(
+        begin_cell()
+            .store_slice(BLANK_CONTRACT_CELL2)
+        .end_cell()
+    )
+    .end_cell();
+}
+
+{-TLB
+    _ split_depth:(Maybe (## 5)) special:(Maybe TickTock)
+      code:(Maybe ^Cell) data:(Maybe ^Cell)
+      library:(HashmapE 256 SimpleLib) = StateInit;
+-}
+cell calc_blank_contract_state_init(cell data) inline {
+    return begin_cell()
+            .store_uint(0,1 + 1) ;; split_depth (Maybe = 0) and special (Maybe = 0)
+            .store_maybe_ref(blank_contract_code_cell())
+            .store_maybe_ref(data)
+            .store_uint(0,1) ;; libraries - empty cell
+            .end_cell();
+}
+
+{-TLB
+  addr_std$10 anycast:(Maybe Anycast)
+   workchain_id:int8 address:bits256  = MsgAddressInt;
+-}
+slice calc_address(cell state_init) inline {
+    return begin_cell()
+            .store_uint(4, 3) ;; 0x100 : $10 + anycast (Maybe = 0)
+            .store_int(workchain, 8)
+            .store_uint(cell_hash(state_init), 256)
+            .end_cell()
+            .begin_parse();
+}
+
+{-TLB
+    pool_proof$_ assets:PoolAssets = PoolProof;
+-}
+cell calc_pool_proof(cell assets) inline {
+    return assets;
+}
+
+cell calc_pool_state_init(slice factory_address, cell proof) inline {
+    return calc_blank_contract_state_init(
+        begin_cell()
+            .store_slice(factory_address)
+            .store_uint(type::pool, 8)
+            .store_uint(0, 32)
+            .store_uint(0, 32)
+            .store_uint(0, 64)
+            .store_uint(0, 64)
+            .store_uint(0, 64)
+            .store_uint(0, 64)
+            .store_coins(0)
+            .store_ref(proof)
+            .store_dict(new_dict())
+            .store_uint(0, 2)
+            .store_ref(
+                begin_cell().end_cell()
+            )
+            .store_ref(
+                begin_cell().end_cell()
+            )
+        .end_cell()
+    );
+}
+
+
+{-TLB
+    vault_proof$_ token:Token = VaultProof;
+-}
+cell calc_vault_proof(slice token) inline {
+   return begin_cell()
+        .store_slice(token)
+        .end_cell();
+}
+
+cell calc_vault_state_init(slice factory_address, cell proof) inline {
+    slice ps = proof.begin_parse();
+
+    return calc_blank_contract_state_init(
+        begin_cell()
+            .store_slice(factory_address)
+            .store_uint(type::vault, 8)
+            .store_slice(ps~load_token())
+            .store_uint(0, 2)
+        .end_cell()
+    );
+}
+
+{-TLB
+    liquidity_deposit_proof$_ owner_address:MsgAddress pool_address:MsgAddress = LiquidityDepositProof;
+-}
+cell calc_liquidity_deposit_proof(slice owner_address, slice pool_address) inline {
+    return begin_cell()
+            .store_slice(owner_address)
+            .store_slice(pool_address)
+            .store_maybe_ref(null())
+           .end_cell();
+}
+
+{-TLB
+    Storage
+    $_ factory_address:MsgAddress contract_type:(## 8) owner_address:MsgAddress pool_address:MsgAddress = LiquidityDepositStorage;
+-}
+cell calc_liquidity_deposit_state_init(slice factory_address, cell proof) inline {
+    slice ps = proof.begin_parse();
+
+    return calc_blank_contract_state_init(
+        begin_cell()
+            .store_slice(factory_address)
+            .store_uint(type::liquidity_deposit, 8)
+            .store_slice(ps~load_msg_addr())
+            .store_slice(ps~load_msg_addr())
+            .store_maybe_ref(null())
+        .end_cell()
+    );
+}

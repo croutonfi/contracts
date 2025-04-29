@@ -1,0 +1,19 @@
+;; permissions should be checked by the consuming contract!
+{-TLB upgrade#0xdbfaf817 query_id:uint64 code:^cell fwdMsg:(Maybe ^Cell) = UpgradeMsgBody; -}
+() handle_upgrade(slice in_msg_body) impure inline {
+    set_code(in_msg_body~load_ref());
+
+    cell fwd_msg_payload = in_msg_body~load_maybe_ref();
+
+    if(~(fwd_msg_payload.cell_null?())) {
+        var msg = begin_cell()
+            .store_msg_flag(msg_flag::non_bounceable)
+            .store_slice(my_address())
+            .store_coins(0)
+            .store_msgbody_prefix_ref(
+                fwd_msg_payload
+            );
+
+        send_raw_message(msg.end_cell(), CARRY_REMAINING_GAS);
+    }
+}

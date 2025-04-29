@@ -1,0 +1,31 @@
+int get_price_record_hash(slice data) method_id {
+    return slice_hash(data);
+}
+
+(slice, int, int, int, cell, cell, cell) get_oracle_data() method_id {
+    load_storage();
+    return (
+        storage::owner_address,
+        storage::valid_signers_threshold,
+        storage::valid_sources_threshold,
+        storage::max_timestamp_delay,
+        storage::trusted_signers,
+        storage::certificate_trust_store,
+        storage::price_records
+    );
+}
+
+(int, int, int) get_price(int asset_index) method_id {
+    load_storage();
+    (slice price_record, int data_found) = storage::price_records.udict_get?(8, asset_index);
+    throw_unless(error::invalid_asset_index, data_found);
+    return (
+        price_record~load_uint(256),
+        price_record~load_uint(64),
+        price_record~load_coins()
+    );
+}
+
+int get_is_signature_valid(int data_hash, slice signature, int public_key) method_id {
+    return check_signature(data_hash, signature, public_key);
+}

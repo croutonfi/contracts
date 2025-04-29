@@ -1,0 +1,543 @@
+#include "./lib/stdlib.func";
+#include "./lib/params.func";
+#include "./lib/common.func";
+#include "./lib/op-codes.func";
+#include "./lib/messages.func";
+#include "./lib/error-codes.func";
+#include "./lib/helpers.func";
+#include "./lib/tokens.func";
+#include "./lib/gas.func";
+#include "./lib/upgrades.func";
+
+#include "./liquidity_deposit/assets.func";
+#include "./jetton/jetton-utils.func";
+
+#include "./pool/constants.func";
+#include "./pool/storage.func";
+#include "./pool/helpers.func";
+#include "./pool/math.func";
+#include "./pool/getters.func";
+#include "./pool/proof.func";
+#include "./pool/payout.func";
+#include "./pool/shares.func";
+#include "./pool/admin.func";
+
+{-TLB init_pool#0x69a3f9b9 query_id:uint64 initial_A:uint32 fee:uint64 admin_fee:uint64 rates:^(VarUInteger 32 (VarUInteger 128)) rates_manager:MsgAddress shares_wallet_code:^Cell  = InitMsgBody; -}
+() handle_init_pool(int query_id, slice sender_address, slice in_msg_body) impure {
+    throw_unless(error::unauthorized, equal_slice_bits(sender_address, my_address()));
+
+    storage::initial_A = in_msg_body~load_uint(32) * A_PRECISION;
+    storage::future_A = storage::initial_A;
+    storage::initial_A_time = now();
+    storage::future_A_time = now();
+    storage::fee = in_msg_body~load_uint(64);
+    storage::admin_fee = in_msg_body~load_uint(64);
+    storage::rates = deserialize_pool_rates(in_msg_body~load_dict());
+    storage::oracle_address = in_msg_body~load_msg_addr();
+    storage::total_supply = 0;
+    storage::shares_wallet_code = in_msg_body~load_ref();
+    storage::content = in_msg_body~load_ref();
+
+    save_storage();
+}
+
+() handle_update_reserves(int query_id, int msg_value, slice sender_address, slice in_msg_body) impure inline {
+    {-TLB
+        $_ token:Token balance:(VarUInteger 16) next_asset:(Maybe ^LiquidityDepositStorage) = LiquidityDepositAssets;
+        update_reserves#0xe8824c87 query_id:uint64 owner_address:MsgAddress assets:(^LiquidityDepositAssets) min_shares_out:(VarUInteger 16)
+    -}
+
+    slice owner_address = in_msg_body~load_msg_addr();
+    slice liquidity_deposit_address = calc_address(
+        calc_liquidity_deposit_state_init(
+           storage::factory_address,
+           calc_liquidity_deposit_proof(
+                owner_address,
+                my_address()
+           )
+        )
+    );
+    throw_unless(error::unauthorized, equal_slice_bits(sender_address, liquidity_deposit_address));
+
+    cell assets = in_msg_body~load_ref();
+    int min_shares_out = in_msg_body~load_coins();
+
+    (
+      tuple tokens,
+      tuple amounts_in
+    ) = deserialize_liquidity_deposit_assets(assets);
+
+    if(~(is_pool_initialized()) & (tlen(tokens) != storage::n_coins)) {
+        return send_batch_payout(query_id, msg_value, owner_address, tokens, amounts_in);
+    }
+
+    tuple old_balances = storage::balances;
+
+    int amp = calc_A_precise();
+    int D0 = calc_D_mem(old_balances, amp);
+    tuple new_balances = storage::balances;
+
+    var i = 0;
+    repeat(tlen(tokens)) {
+        var pool_token_index = find_token_index(tokens.at(i));
+        if(pool_token_index == -1) {
+            return send_batch_payout(query_id, msg_value, owner_address, tokens, amounts_in);
+        }
+
+        new_balances~tset(
+            pool_token_index,
+            new_balances.at(pool_token_index) + amounts_in.at(i)
+        );
+
+        i += 1;
+    }
+
+    int D1 = calc_D_mem(new_balances, amp);
+    if (D1 <= D0) {
+        return send_batch_payout(query_id, msg_value, owner_address, tokens, amounts_in);
+    }
+
+    int D2 = D1;
+    int mint_amount = 0;
+
+    if (storage::total_supply > 0) {
+        int fee_numerator = storage::fee * storage::n_coins / (4 * (storage::n_coins - 1));
+
+        int idx = 0;
+        repeat(storage::n_coins) {
+            int ideal_balance = D1 * old_balances.at(idx) / D0;
+            int new_balance = new_balances.at(idx);
+            int difference = ideal_balance > new_balance
+                ? ideal_balance - new_balance
+                : new_balance - ideal_balance;
+
+            int total_fee = fee_numerator * difference  / FEE_DENOMINATOR;
+            int admin_fee = total_fee * storage::admin_fee / FEE_DENOMINATOR;
+
+            storage::balances~tset(idx, new_balance - admin_fee);
+            storage::admin_fee_balances~tset(idx, storage::admin_fee_balances.at(idx) + admin_fee);
+            new_balances~tset(idx, new_balance - total_fee);
+
+            idx = idx + 1;
+        }
+
+        D2 = calc_D_mem(new_balances, amp);
+        mint_amount = storage::total_supply * (D2 - D0) / D0;
+    } else {
+        storage::balances = new_balances;
+        mint_amount = D1;
+    }
+
+    if (mint_amount < min_shares_out) {
+        return send_batch_payout(query_id, msg_value, owner_address, tokens, amounts_in);
+    }
+
+    mint_shares(query_id, owner_address, mint_amount);
+
+    storage::total_supply = storage::total_supply + mint_amount;
+    save_storage();
+}
+
+
+() handle_swap_internal(int query_id, slice from_token, int msg_value, slice in_msg_body) impure inline {
+    {-TLB
+        swap_params#_ recipient:MsgAddress deadline:uint64 success_payload:Maybe(^Cell) fail_payload:Maybe(^Cell) = SwapParams;
+        swap_step#_ pool:MsgAddress to_token:Token limit:(VarUInteger 16) next:Maybe(^SwapStep) = SwapStep;
+        initial_step#_ to_token:Token limit:(VarUInteger 16) next:Maybe(^SwapStep) = InitialStep;
+
+        swap_notification#0x278f5089
+            query_id:uint64
+            from_token:Token
+            sender:MsgAddress
+            amount:(VarUInteger 16)
+            steps:^InitalStep
+            params:^SwapParams
+    -}
+
+    slice sender = in_msg_body~load_msg_addr();
+    int amount_in = in_msg_body~load_coins();
+    slice initial_step = in_msg_body~load_ref().begin_parse();
+    slice swap_params = in_msg_body~load_ref().begin_parse();
+
+    slice recipient = swap_params~load_msg_addr();
+    int deadline = swap_params~load_uint(64);
+    cell success_payload = swap_params~load_maybe_ref();
+    cell fail_payload = swap_params~load_maybe_ref();
+
+    slice to_token = initial_step~load_token();
+    int min_amount_out = initial_step~load_coins();
+    cell next_step = initial_step~load_maybe_ref();
+
+    int from_token_index = find_token_index(from_token);
+    int to_token_index = find_token_index(to_token);
+
+    if ((from_token_index == -1) | (to_token_index == -1)) {
+        send_payout(query_id, from_token, sender, amount_in, 0, fail_payload, CARRY_REMAINING_GAS);
+
+        return ();
+    }
+
+    tuple rates = storage::rates;
+    tuple xp = calc_xp_mem(storage::balances);
+    int x = xp.at(from_token_index) + amount_in * rates.at(from_token_index) / PRECISION;
+
+    ;; the only place overflow can happen in case of extremely disbalanced pools
+    int y = 0;
+    try {
+        y = calc_y(from_token_index, to_token_index, x, xp);
+    } catch(_x, _n) {
+        y = 0;
+    }
+
+    int amount_out = xp.at(to_token_index) - y - 1;
+    int fee = amount_out * storage::fee / FEE_DENOMINATOR;
+
+    amount_out = (amount_out - fee) * PRECISION / rates.at(to_token_index);
+
+    var is_sufficient_output = (amount_out > 0 ) & (amount_out >= min_amount_out);
+    var deadline_not_exceeded = deadline >= now();
+    var is_valid_swap = is_sufficient_output & deadline_not_exceeded;
+
+    if (~(is_valid_swap)) {
+        send_payout(query_id, from_token, sender, amount_in, 0, fail_payload, CARRY_REMAINING_GAS);
+
+        return ();
+    }
+
+    int admin_fee = fee * storage::admin_fee / FEE_DENOMINATOR;
+    admin_fee = admin_fee * PRECISION / rates.at(to_token_index);
+
+    storage::balances~tset(from_token_index, storage::balances.at(from_token_index) + amount_in);
+    storage::balances~tset(to_token_index, storage::balances.at(to_token_index) - amount_out - admin_fee);
+    storage::admin_fee_balances~tset(to_token_index, storage::admin_fee_balances.at(to_token_index) + admin_fee);
+
+    if (next_step.cell_null?()) {
+        send_payout(query_id, to_token, recipient.addr_none?() ? sender : recipient, amount_out, 0, success_payload, CARRY_REMAINING_GAS);
+    } else {
+        slice next_step_slice = next_step.begin_parse();
+        slice next_pool_address = next_step_slice~load_msg_addr();
+
+        cell swap_params_cell = begin_cell()
+            .store_slice(recipient)
+            .store_uint(deadline, 64)
+            .store_maybe_ref(success_payload)
+            .store_maybe_ref(fail_payload)
+            .end_cell();
+
+        cell initial_step_cell = begin_cell()
+            .store_slice(next_step_slice)
+            .end_cell();
+
+        var msg_body = begin_cell()
+            .store_op(op::peer_swap)
+            .store_query_id(query_id)
+            .store_slice(to_token)
+            .store_ref(
+                calc_pool_proof(get_proof_params())
+            )
+            .store_slice(sender)
+            .store_coins(amount_out)
+            .store_ref(initial_step_cell)
+            .store_ref(swap_params_cell)
+            .end_cell();
+
+        var msg = begin_cell()
+            .store_msg_flag(msg_flag::non_bounceable)
+            .store_slice(next_pool_address)
+            .store_coins(0)
+            .store_msgbody_prefix_ref(msg_body);
+
+        send_raw_message(msg.end_cell(), CARRY_REMAINING_GAS);
+    }
+
+    save_storage();
+}
+
+() handle_swap(int query_id, int msg_value, slice msg_sender_address, slice in_msg_body) impure inline {
+    slice from_token = in_msg_body~load_token();
+    slice vault_address = calc_address(
+        calc_vault_state_init(
+            storage::factory_address, calc_vault_proof(from_token)
+        )
+    );
+
+    throw_unless(error::unauthorized, equal_slices(msg_sender_address, vault_address));
+
+    handle_swap_internal(query_id, from_token, msg_value, in_msg_body);
+}
+
+() handle_peer_swap(int query_id, int msg_value, slice msg_sender_address, slice in_msg_body) impure inline {
+    slice from_token = in_msg_body~load_token();
+    cell proof = in_msg_body~load_ref();
+    slice pool_address = calc_address(
+        calc_pool_state_init(
+            storage::factory_address, calc_pool_proof(proof)
+        )
+    );
+
+    throw_unless(error::unauthorized, equal_slices(msg_sender_address, pool_address));
+
+    handle_swap_internal(query_id, from_token, msg_value, in_msg_body);
+}
+
+int handle_remove_liquidity_balanced(int query_id, slice from_address, int shares_to_burn, tuple min_amounts, int msg_value) impure inline {
+    int computed_burn_lp_pool_fee = burn_lp_pool_fee(storage::n_coins);
+    throw_unless(
+        error::not_enough_tons,
+        msg_value >= computed_burn_lp_pool_fee
+    );
+
+
+    int idx = 0;
+    repeat(storage::n_coins) {
+        int old_balance = storage::balances.at(idx);
+        int amount_to_payout = old_balance * shares_to_burn / storage::total_supply;
+
+        throw_unless(error::output_is_less_than_min_out, amount_to_payout >= min_amounts.at(idx));
+
+        storage::balances~tset(idx, old_balance - amount_to_payout);
+
+        send_payout(
+            query_id,
+            storage::tokens.at(idx),
+            from_address,
+            amount_to_payout,
+            payout_fee(),
+            null(),
+            REVERT_ON_ERRORS
+        );
+
+        idx = idx + 1;
+    }
+
+    return msg_value - computed_burn_lp_pool_fee;
+}
+
+int handle_remove_liqudity_one_coin(int query_id, slice from_address, int shares_to_burn, int token_index, int min_amount_out, int msg_value) impure inline {
+    throw_unless(
+        error::not_enough_tons,
+        msg_value >= burn_lp_pool_fee(1)
+    );
+
+    var (dy, dy_fee) = calc_withdraw_one_coin(shares_to_burn, token_index);
+
+    throw_unless(error::output_is_less_than_min_out, dy >= min_amount_out);
+
+    int admin_fee = dy_fee * storage::admin_fee / FEE_DENOMINATOR;
+    storage::balances~tset(token_index, storage::balances.at(token_index) - dy - admin_fee);
+    storage::admin_fee_balances~tset(token_index, storage::admin_fee_balances.at(token_index) + admin_fee);
+
+    send_payout(
+        query_id,
+        storage::tokens.at(token_index),
+        from_address,
+        dy,
+        0,
+        null(),
+        CARRY_REMAINING_GAS
+    );
+
+    return 0;
+}
+
+() handle_burn_notification(int query_id, slice sender_address, slice in_msg_body, int msg_value) impure inline {
+    int shares_amount = in_msg_body~load_coins();
+    slice from_address = in_msg_body~load_msg_addr();
+    slice response_address = in_msg_body~load_msg_addr();
+
+    throw_unless(error::unauthorized_burn_request,
+        equal_slice_bits(calc_user_wallet(from_address, my_address(), storage::shares_wallet_code), sender_address)
+    );
+
+    cell custom_payload = in_msg_body~load_maybe_ref();
+
+    int excess_amount = 0;
+    if (~(custom_payload.cell_null?())) {
+        slice cs = custom_payload.begin_parse();
+        int op = cs~load_uint(32);
+
+        if (op == op::remove_liquidity_balanced) {
+            cell serialized_amounts = cs~load_ref();
+            tuple min_amounts = deserialize_amounts(serialized_amounts);
+
+            throw_unless(error::wrong_amounts, tlen(min_amounts) == storage::n_coins);
+
+            excess_amount = handle_remove_liquidity_balanced(query_id, from_address, shares_amount, min_amounts, msg_value);
+        } else {
+            if (op == op::remove_liquidity_one_coin) {
+                int token_index = cs~load_uint(8);
+                int min_amount_out = cs~load_coins();
+
+                throw_unless(error::invalid_token_index, (token_index >= 0) & (token_index <= (storage::n_coins - 1)));
+
+                excess_amount = handle_remove_liqudity_one_coin(query_id, from_address, shares_amount, token_index, min_amount_out, msg_value);
+            } else {
+                throw(error::unknown_op);
+            }
+        }
+    } else {
+        tuple zero_min_amounts = empty_tuple();
+
+        int idx = 0;
+        repeat(storage::n_coins) {
+            zero_min_amounts~tpush(0);
+
+            idx = idx + 1;
+        }
+
+        excess_amount = handle_remove_liquidity_balanced(query_id, from_address, shares_amount, zero_min_amounts, msg_value);
+    }
+
+    storage::total_supply -= shares_amount;
+    save_storage();
+
+    if (excess_amount > excess_fee()) {
+        send_excesses(
+            query_id,
+            response_address.preload_uint(2) != 0 ? response_address : from_address,
+            excess_amount,
+            IGNORE_ERRORS
+        );
+    }
+
+    return ();
+}
+
+() handle_provide_wallet_address(int query_id, int msg_value, int fwd_fee, slice sender_address, slice in_msg_body) {
+    throw_unless(error::discovery_fee_not_matched, msg_value > fwd_fee + PROVIDE_ADDRESS_GAS_CONSUMPTION);
+
+    slice owner_address = in_msg_body~load_msg_addr();
+    int include_address? = in_msg_body~load_uint(1);
+
+    cell included_address = include_address?
+            ? begin_cell().store_slice(owner_address).end_cell()
+            : null();
+
+    var msg = begin_cell()
+            .store_msg_flag(msg_flag::bounceable)
+            .store_slice(sender_address)
+            .store_coins(0)
+            .store_msgbody_prefix_slice()
+            .store_op(op::take_wallet_address)
+            .store_query_id(query_id);
+
+    if (is_resolvable?(owner_address)) {
+        msg = msg.store_slice(calc_user_wallet(owner_address, my_address(), storage::shares_wallet_code));
+    } else {
+        msg = msg.store_uint(0, 2); ;; addr_none
+    }
+
+    send_raw_message(msg.store_maybe_ref(included_address).end_cell(), CARRY_REMAINING_GAS);
+    return ();
+}
+
+() recv_internal(int my_balance, int msg_value, cell in_msg_full, slice in_msg_body) impure {
+    if (in_msg_body.slice_empty?()) { ;; ignore empty messages
+        return ();
+    }
+    slice cs = in_msg_full.begin_parse();
+
+    int flags = cs~load_uint(4);
+    if (flags & 1) { ;; ignore all bounced messages
+        return ();
+    }
+    slice sender_address = cs~load_msg_addr();
+    cs~load_msg_addr(); ;; skip dst
+    cs~load_coins(); ;; skip value
+    cs~skip_bits(1); ;; skip extracurrency collection
+    cs~load_coins(); ;; skip ihr_fee
+    int fwd_fee = cs~load_coins();
+
+    int op = in_msg_body~load_op();
+    int query_id = in_msg_body~load_query_id();
+
+    load_storage();
+
+    if (op == op::init_pool) {
+        handle_init_pool(query_id, sender_address, in_msg_body);
+
+        return ();
+    }
+
+    if(op == op::update_reserves) {
+        handle_update_reserves(query_id, msg_value, sender_address, in_msg_body);
+
+        return ();
+    }
+
+    if(op == op::swap_notification) {
+        handle_swap(query_id, msg_value, sender_address, in_msg_body);
+
+        return ();
+    }
+
+    if(op == op::peer_swap) {
+        handle_peer_swap(query_id, msg_value, sender_address, in_msg_body);
+
+        return ();
+    }
+
+    if (op == op::burn_notification) {
+        handle_burn_notification(query_id, sender_address, in_msg_body, msg_value);
+
+        return ();
+    }
+
+    if (op == op::provide_wallet_address) {
+        handle_provide_wallet_address(query_id, msg_value, fwd_fee, sender_address, in_msg_body);
+
+        return ();
+    }
+
+    if (op == op::change_content) {
+        handle_change_content(sender_address, in_msg_body);
+
+        return ();
+    }
+
+    if (op == op::update_fees) {
+        handle_set_fees(sender_address, in_msg_body);
+
+        return ();
+    }
+
+    if (op == op::update_A) {
+        handle_update_A(sender_address, in_msg_body);
+
+        return ();
+    }
+
+    if (op == op::stop_update_A) {
+        handle_stop_update_A(sender_address);
+
+        return ();
+    }
+
+    if (op == op::update_rates_manager) {
+        handle_update_rates_manager(sender_address, in_msg_body);
+
+        return ();
+    }
+
+    if (op == op::update_rates) {
+        handle_update_rates(sender_address, in_msg_body);
+
+        return ();
+    }
+
+    if (op == op::withdraw_admin_fees) {
+        handle_withdraw_admin_fees(sender_address, query_id, in_msg_body);
+
+        return ();
+    }
+
+    if (op == op::upgrade) {
+        throw_unless(error::caller_not_authorized, equal_slice_bits(sender_address, storage::factory_address));
+
+        handle_upgrade(in_msg_body);
+
+        return ();
+    }
+
+    throw(error::unknown_op);
+}

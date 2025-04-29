@@ -1,0 +1,45 @@
+{-TLB
+    token$00 jetton_master_address:MsgAddress = Token;
+    token$01 = Token;
+-}
+const int token_type::jetton = 0;
+const int token_type::native = 1;
+
+(builder) store_native_token(builder b) inline {
+    return b.store_uint(token_type::native, 2);
+}
+
+(builder) store_jetton_token(builder b, slice jetton_master_address) inline {
+    return b.store_uint(token_type::jetton, 2).store_slice(jetton_master_address);
+}
+
+(slice, slice) ~load_token(slice s) inline {
+    (_, slice token_type_slice) = s.load_bits(2);
+    int token_type = token_type_slice.preload_uint(2);
+
+    if(token_type == token_type::jetton) {
+        (_, slice addr) = s.skip_bits(2).load_msg_addr();
+        int token_length = addr.slice_bits() + 2;
+
+        return (
+            s.skip_bits(token_length),
+            s.preload_bits(token_length)
+        );
+    }
+
+    throw_unless(error::unknown_asset_type, token_type == token_type::native);
+
+    return (
+        s.skip_bits(2),
+        token_type_slice
+    );
+}
+
+(int, slice) parse_token(slice s) inline {
+    int token_type = s~load_uint(2);
+
+    return (
+        token_type,
+        token_type == token_type::jetton ? s~load_msg_addr() : null()
+    );
+}

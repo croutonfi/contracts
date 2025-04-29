@@ -1,0 +1,12 @@
+{-TLB
+    transfer_ownership#295e75a9 query_id:uint64 new_owner:msg_address = UpdateOwnerMsgBody;
+-}
+() handle_transfer_ownership(slice in_msg_body) impure inline {
+    slice new_owner = in_msg_body~load_msg_addr();
+
+    force_chain(new_owner);
+
+    storage::owner_address = new_owner;
+    in_msg_body.end_parse();
+    save_storage();
+}

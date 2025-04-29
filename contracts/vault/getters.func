@@ -1,0 +1,9 @@
+(slice, int, slice) get_vault_data() method_id {
+    load_storage();
+
+    return (
+        storage::factory_address,
+        storage::contract_type,
+        storage::token
+    );
+}

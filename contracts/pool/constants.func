@@ -1,0 +1,10 @@
+const int FEE_DENOMINATOR = 10000000000;
+const int PRECISION = 1000000000000000000;
+
+const int MAX_FEE = 5000000000;
+const int MAX_ADMIN_FEE = 10000000000;
+
+const int MAX_A = 1000000;
+const int MAX_A_CHANGE = 100;
+
+const int A_PRECISION = 100;

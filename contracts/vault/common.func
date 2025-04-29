@@ -1,0 +1,177 @@
+#include "../pool/assets.func";
+#include "../jetton/jetton-utils.func";
+
+;; comomn storage
+global slice storage::factory_address;
+global int storage::contract_type;
+global slice storage::token;
+
+
+{-TLB
+    swap_params#_ recipient:MsgAddress deadline:uint64 success_payload:Maybe(^Cell) fail_payload:Maybe(^Cell) = SwapParams;
+    swap_step#_ pool:MsgAddress to_token:Token limit:(VarUInteger 16) next:Maybe(^SwapStep) = SwapStep;
+    swap#0x25938561 steps:^SwapStep params:^SwapParams = JettonOpMsgBody;
+
+-}
+;; op_msg_body should be parsed after op + query_id + token_amount
+() handle_swap(int query_id, slice owner_address, int token_amount, slice op_msg_body, int fwd_amount, int mode) impure inline {
+    {-TLB
+        initial_step#_ token:Token limit:(VarUInteger 16) next:Maybe(^SwapStep) = InitialStep;
+
+        swap_notification#0x278f5089
+            query_id:uint64
+            from_token:Token
+            sender:MsgAddress
+            amount:(VarUInteger 16)
+            steps:^InitalStep
+            params:^SwapParams
+    -}
+
+
+    var steps = op_msg_body~load_ref().begin_parse();
+    var swap_params = op_msg_body~load_ref();
+
+    var initial_pool = steps~load_msg_addr();
+    var initial_to_token = steps~load_token();
+    var initial_limit = steps~load_coins();
+    var next_steps = steps~load_maybe_ref();
+
+    var initial_step = begin_cell()
+        .store_slice(initial_to_token)
+        .store_coins(initial_limit)
+        .store_maybe_ref(next_steps)
+        .end_cell();
+
+    var msg_body = begin_cell()
+        .store_op(op::swap_notification)
+        .store_query_id(query_id)
+        .store_slice(storage::token)
+        .store_slice(owner_address)
+        .store_coins(token_amount)
+        .store_ref(initial_step)
+        .store_ref(swap_params)
+        .end_cell();
+
+    var msg = begin_cell()
+        .store_msg_flag(msg_flag::non_bounceable)
+        .store_slice(initial_pool)
+        .store_coins(fwd_amount)
+        .store_msgbody_prefix_ref(msg_body);
+
+    send_raw_message(msg.end_cell(), mode);
+}
+
+;; op_msg_body should be parsed after op + query_id + token_amount
+{-TLB
+    add_liquidity#0x406d7624 pool_address:MsgAddress = JettonOpMsgBody;
+-}
+() handle_add_liquiditiy(int query_id, slice owner_address, int token_amount, slice op_msg_body, int fwd_amount, int mode) impure inline {
+    {-TLB
+        add_liquidity_additional_params# expected_tokens_count:uint8 min_shares_out:(VarUInteger 16) = AddLiquidityAdditionalParams
+        add_liquidity_notification#0x406d7624 query_id:uint64
+            token:Token amount:(VarUInteger 16)
+            pool_address:MsgAddress owner_address:MsgAddress params:(^AddLiquidityAdditionalParams) = AddLiquidityNotificationMsgBody;
+    -}
+
+    slice pool_address = op_msg_body~load_msg_addr();
+    int expected_tokens_count = op_msg_body~load_uint(8);
+    int min_shares_out = op_msg_body~load_coins();
+
+    var msg_body = begin_cell()
+        .store_op(op::add_liquidity_notification)
+        .store_query_id(query_id)
+        .store_slice(storage::token)
+        .store_coins(token_amount)
+        .store_slice(pool_address)
+        .store_slice(owner_address)
+        .store_ref(
+            begin_cell()
+                .store_uint(expected_tokens_count, 8)
+                .store_coins(min_shares_out)
+                .end_cell()
+        )
+        .end_cell();
+
+    var msg = begin_cell()
+        .store_msg_flag(msg_flag::non_bounceable)
+        .store_slice(storage::factory_address)
+        .store_coins(fwd_amount)
+        .store_msgbody_prefix_ref(msg_body);
+
+    send_raw_message(msg.end_cell(), mode);
+}
+
+;; This function assumes already authorized context
+() handle_withdraw_jettons(int query_id, slice in_msg_body) impure inline {
+    {-TLB
+        op::withdraw_jettons#0x768a50b2 query_id:uint64 jetton_wallet_address:MsgAddress to:MsgAddress amount:(VarUInteger 16) = WithdrawJettonsMsgBody;
+    -}
+
+    slice jetton_wallet_address = in_msg_body~load_msg_addr();
+    slice to = in_msg_body~load_msg_addr();
+    int amount = in_msg_body~load_coins();
+
+    send_jetton_payout(query_id, to, jetton_wallet_address, amount, 0, null());
+
+    return ();
+}
+
+() send_tons(int query_id, slice to, int amount, cell fwd_payload) impure inline {
+    var default_fwd_payload = begin_cell()
+        .store_op(op::transfer)
+        .store_query_id(query_id)
+        .end_cell();
+
+    var msg = begin_cell()
+        .store_msg_flag(msg_flag::bounceable)
+        .store_slice(to)
+        .store_coins(amount)
+        .store_msgbody_prefix_ref(
+            fwd_payload.cell_null?() ? default_fwd_payload : fwd_payload
+        )
+        .end_cell();
+
+    send_raw_message(msg, CARRY_REMAINING_GAS);
+}
+
+() handle_withdraw_tons(int query_id, slice in_msg_body) impure inline {
+    {-TLB
+        op::withdraw_tons#0x6d8e5e3c query_id:uint64 to:MsgAddress amount:(VarUInteger 16) = WithdrawTonsMsgBody;
+    -}
+
+    slice to = in_msg_body~load_msg_addr();
+    int amount = in_msg_body~load_coins();
+
+    send_tons(query_id, to, amount, null());
+
+    return ();
+}
+
+(slice, int, cell) parse_and_validate_payout(slice sender_address, slice in_msg_body) impure {
+    slice to = in_msg_body~load_msg_addr();
+    int amount = in_msg_body~load_coins();
+    cell proof = in_msg_body~load_ref();
+    cell fwd_payload = in_msg_body~load_maybe_ref();
+
+    throw_unless(
+        error::unauthorized,
+        equal_slice_bits(
+            sender_address,
+            calc_address(
+                calc_pool_state_init(
+                    storage::factory_address,
+                    proof
+                )
+            )
+        )
+    );
+
+    var (pool_tokens, _, _, _) = deserialize_pool_assets(proof);
+    throw_unless(
+        error::unauthorized,
+        index_of_slice_in_tuple(pool_tokens, storage::token) != -1
+    );
+
+    return (to, amount, fwd_payload);
+}
+

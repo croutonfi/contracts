@@ -1,0 +1,223 @@
+int calc_A_precise() {
+    int t1 = storage::future_A_time;
+    int A1 = storage::future_A;
+
+    if (now() < t1) {
+        int A0 = storage::initial_A;
+        int t0 = storage::initial_A_time;
+
+        return A0 + (A1 - A0) * (now() - t0) / (t1 - t0);
+    } else {
+        return storage::future_A;
+    }
+}
+
+tuple calc_xp_mem(tuple balances) {
+    tuple result = empty_tuple();
+    tuple rates = storage::rates;
+
+    int idx = 0;
+    repeat(storage::n_coins) {
+        int balance = balances.at(idx);
+        int rate = rates.at(idx);
+
+        result~tpush(balance * rate / PRECISION);
+
+        idx = idx + 1;
+    }
+
+    return result;
+}
+
+tuple calc_xp() {
+    return calc_xp_mem(storage::balances);
+}
+
+int calc_D(tuple xp, int amp) {
+    int N_COINS = storage::n_coins;
+    int S = 0;
+
+    int idx = 0;
+    while (idx < N_COINS) {
+        S += xp.at(idx);
+
+        idx = idx + 1;
+    }
+
+    if (S == 0) {
+        return 0;
+    }
+
+    int D_prev = 0;
+    int D = S;
+    int Ann = amp * N_COINS;
+
+    int iter = 0;
+    while (iter < 255) {
+        int D_P = D;
+
+        int idx = 0;
+        while (idx < N_COINS) {
+            D_P = D_P * D / (xp.at(idx) * N_COINS);
+
+            idx = idx + 1;
+        }
+
+        D_prev = D;
+        D = (Ann * S / A_PRECISION + D_P * N_COINS) * D / ((Ann - A_PRECISION) * D / A_PRECISION + (N_COINS + 1) * D_P);
+
+        int D_diff = D - D_prev;
+        if ((D_diff >= -1) & (D_diff <= 1)) {
+            return D;
+        }
+
+        iter = iter + 1;
+    }
+
+    throw(error::convergence_did_not_occur);
+    return 0;
+}
+
+int calc_D_mem(tuple balances, int amp) {
+    return calc_D(calc_xp_mem(balances), amp);
+}
+
+int calc_y(int i, int j, int x, tuple xp) {
+    int N_COINS = storage::n_coins;
+
+    throw_unless(error::same_coins_provided, i != j);
+    throw_unless(error::index_below_zero, j >= 0);
+    throw_unless(error::index_above_n_coins, j < N_COINS);
+
+    throw_unless(error::index_below_zero,  i >= 0);
+    throw_unless(error::index_above_n_coins, i < N_COINS);
+
+    int A = calc_A_precise();
+    int D = calc_D(xp, A);
+    int Ann = A * N_COINS;
+    int c = D;
+    int S = 0;
+    int _x = 0;
+    int y_prev = 0;
+
+    int idx = 0;
+    while (idx < N_COINS) {
+        var should_skip = false;
+
+        if (idx == i) {
+            _x = x;
+        } elseif (idx != j) {
+            _x = xp.at(idx);
+        } else {
+            should_skip = true; ;; (╯°□°)╯︵ ┻━┻
+        }
+
+        if (~(should_skip)) {
+            S += _x;
+            c = c * D / (_x * N_COINS);
+        }
+
+        idx = idx + 1;
+    }
+
+    c = c * D * A_PRECISION / (Ann * N_COINS);
+    int b = S + D * A_PRECISION / Ann;
+    int y = D;
+
+    int iter = 0;
+    while (iter < 255) {
+        y_prev = y;
+        y = (y * y + c) / (2 * y + b - D);
+
+        ;; Rough equality with the precision of 1
+        int y_diff = y - y_prev;
+        if ((y_diff >= -1) & (y_diff <= 1)) {
+            return y;
+        }
+
+        iter = iter + 1;
+    }
+
+    throw(error::convergence_did_not_occur);
+    return 0;
+}
+
+int calc_y_D(int A, int i, tuple xp, int D) {
+    int N_COINS = storage::n_coins;
+
+    throw_unless(error::index_below_zero, i >= 0);
+    throw_unless(error::index_above_n_coins, i < N_COINS);
+
+    int Ann = A * N_COINS;
+    int c = D;
+    int S = 0;
+    int _x = 0;
+    int y_prev = 0;
+
+    int idx = 0;
+    while (idx < N_COINS) {
+        if (idx != i) {
+            _x = xp.at(idx);
+            S += _x;
+            c = c * D / (_x * N_COINS);
+        }
+
+        idx = idx + 1;
+    }
+
+    c = c * D * A_PRECISION / (Ann * N_COINS);
+    int b = S + D * A_PRECISION / Ann;
+    int y = D;
+
+    int iter = 0;
+    while (iter < 255) {
+        y_prev = y;
+        y = (y * y + c) / (2 * y + b - D);
+
+        int y_diff = y - y_prev;
+        if ((y_diff >= -1) & (y_diff <= 1)) {
+            return y;
+        }
+
+        iter = iter + 1;
+    }
+
+    throw(error::convergence_did_not_occur);
+    return 0;
+}
+
+(int, int) calc_withdraw_one_coin(int token_amount, int i) {
+    int N_COINS = storage::n_coins;
+
+    tuple xp = calc_xp();
+    int amp = calc_A_precise();
+    int D0 = calc_D(xp, amp);
+
+    int D1 = D0 - token_amount * D0 / storage::total_supply;
+    int new_y = calc_y_D(amp, i, xp, D1);
+    tuple xp_reduced = calc_xp();
+
+    int fee = storage::fee * N_COINS / (4 * (N_COINS - 1));
+
+    int idx = 0;
+    while (idx < N_COINS) {
+        int dx_expected = 0;
+        if (idx == i) {
+            dx_expected = xp.at(idx) * D1 / D0 - new_y;
+        } else {
+            dx_expected = xp.at(idx) - xp.at(idx) * D1 / D0;
+        }
+
+        xp_reduced~tset(idx, xp_reduced.at(idx) - fee * dx_expected / FEE_DENOMINATOR);
+
+        idx = idx + 1;
+    }
+
+    int dy = xp_reduced.at(i) - calc_y_D(amp, i, xp_reduced, D1);
+    int rate = storage::rates.at(i);
+
+    dy = (dy - 1) * PRECISION / rate;
+    int dy_0 = (xp.at(i) - new_y) * PRECISION / rate;
+
+    return (dy, dy_0 - dy);
+}

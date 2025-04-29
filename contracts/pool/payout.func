@@ -1,0 +1,56 @@
+() send_payout(int query_id, slice token, slice to, int token_amount, int fwd_amount, cell fwd_payload, int mode) impure inline_ref {
+    var vault_address = calc_address(
+        calc_vault_state_init(
+            storage::factory_address,
+            calc_vault_proof(token)
+        )
+    );
+
+    {-TLB payout#0xd4374956 query_id:uint64 to:MsgAddress amount:(VarUInteger 16) proof:^Cell fwd_payload:(Maybe ^Cell) = PayoutMsgBody; -}
+    var msg_body = begin_cell()
+        .store_op(op::payout)
+        .store_query_id(query_id)
+        .store_slice(to)
+        .store_coins(token_amount)
+        .store_ref(
+            calc_pool_proof(get_proof_params())
+        )
+        .store_maybe_ref(fwd_payload)
+        .end_cell();
+
+    var msg = begin_cell()
+        .store_msg_flag(msg_flag::non_bounceable) ;; we should not bounce here cause receiver can have uninitialized contract
+        .store_slice(vault_address)
+        .store_coins(fwd_amount)
+        .store_msgbody_prefix_ref(msg_body);
+
+    send_raw_message(msg.end_cell(), mode);
+}
+
+() send_excesses(int query_id, slice to, int value, int mode) impure inline {
+    var msg = begin_cell()
+        .store_msg_flag(msg_flag::non_bounceable)
+        .store_slice(to)
+        .store_coins(value)
+        .store_msgbody_prefix_slice()
+        .store_op(op::excesses)
+        .store_query_id(query_id);
+
+    send_raw_message(msg.end_cell(), mode);
+}
+
+() send_batch_payout(int query_id, int msg_value, slice to, tuple tokens, tuple amounts) impure inline_ref {
+    int idx = 0;
+    int excess_amount = msg_value - update_reserves_only_fee();
+
+    repeat(tlen(tokens)) {
+        send_payout(query_id, tokens.at(idx), to, amounts.at(idx), payout_fee(), null(), REVERT_ON_ERRORS);
+        excess_amount -= payout_fee();
+
+        idx = idx + 1;
+    }
+
+    if (excess_amount > excess_fee()) {
+        send_excesses(query_id, to, excess_amount, IGNORE_ERRORS);
+    }
+}

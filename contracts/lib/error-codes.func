@@ -1,0 +1,54 @@
+;; global error codes
+
+const int error::unknown_op = 0xffff;
+const int error::not_implemented = 501;
+const int error::wrong_workchain = 333;
+const int error::unauthorized = 403;
+const int error::unknown_asset_type = 404;
+const int error::caller_not_authorized = 405;
+
+;; jetton wallet errors
+const int error::unauthorized_transfer = 705;
+const int error::not_enough_jettons = 706;
+const int error::unauthorized_incoming_transfer = 707;
+const int error::malformed_forward_payload = 708;
+const int error::not_enough_tons = 709;
+const int error::burn_fee_not_matched = 710;
+const int error::unknown_action_bounced = 0xFFF0;
+
+;; jetton minter errors
+const int error::unauthorized_mint_request = 73;
+const int error::unauthorized_burn_request = 74;
+const int error::discovery_fee_not_matched = 75;
+const int error::unauthorized_change_admin_request = 76;
+const int error::unauthorized_change_content_request = 77;
+
+;; liquidity deposit errors
+const int error::no_tokens_deposited = 140;
+
+;; Pool
+const int error::unknown_token = 160;
+const int error::output_is_less_than_min_out = 161;
+const int error::deadline_exceeded = 162;
+const int error::not_initialized = 163;
+const int error::invariant_is_less_than_expected = 164;
+const int error::wrong_amounts = 165;
+const int error::invalid_token_index = 166;
+const int error::invalid_fee = 167;
+const int error::invalid_A = 168;
+const int error::invalid_A_future_time = 169;
+const int error::invalid_rates = 170;
+
+;; math errors
+const int error::convergence_did_not_occur = 101;
+const int error::same_coins_provided = 102;
+const int error::index_below_zero = 103;
+const int error::index_above_n_coins = 104;
+
+
+;; oracle errors
+const int error::insufficient_signatures = 200;
+const int error::invalid_request_hash = 201;
+const int error::insufficient_sources = 202;
+const int error::prices_expired = 203;
+const int error::invalid_asset_index = 204;

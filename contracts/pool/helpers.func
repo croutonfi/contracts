@@ -1,0 +1,17 @@
+int find_token_index(slice token) impure {
+    return index_of_slice_in_tuple(storage::tokens, token);
+}
+
+int is_pool_initialized() inline {
+    int i = 0;
+
+    repeat(storage::n_coins) {
+        if(storage::balances.at(i) > 0) {
+            return true;
+        }
+
+        i += 1;
+    }
+
+    return false;
+}

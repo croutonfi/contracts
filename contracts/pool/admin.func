@@ -1,0 +1,114 @@
+() ensure_authorized_caller(slice sender_address) impure inline {
+    throw_unless(error::caller_not_authorized, equal_slice_bits(sender_address, storage::factory_address));
+}
+
+() ensure_oracle_caller(slice sender_address) impure inline {
+    throw_unless(error::caller_not_authorized, equal_slice_bits(sender_address, storage::oracle_address));
+}
+
+() handle_change_content(slice sender_address, slice in_msg_body) impure inline {
+    ensure_authorized_caller(sender_address);
+
+    storage::content = in_msg_body~load_ref();
+
+    save_storage();
+}
+
+{-TLB set_fees#0xf74a44af query_id:uint64 fee:uint64 admin_fee:uint64 = SetFeesMsgBody; -}
+() handle_set_fees(slice sender_address, slice in_msg_body) impure inline {
+    ensure_authorized_caller(sender_address);
+
+    int fee = in_msg_body~load_uint(64);
+    int admin_fee = in_msg_body~load_uint(64);
+
+    throw_unless(error::invalid_fee, fee <= MAX_FEE);
+    throw_unless(error::invalid_fee, admin_fee <= MAX_ADMIN_FEE);
+
+    storage::fee = fee;
+    storage::admin_fee = admin_fee;
+
+    save_storage();
+}
+
+{-TLB update_A#0xb2a96dab query_id:uint64 A:uint32 future_A_time:uint64 = UpdateAMsgBody; -}
+() handle_update_A(slice sender_address, slice in_msg_body) impure inline {
+    ensure_authorized_caller(sender_address);
+
+    int future_A = in_msg_body~load_uint(32);
+    int future_A_time = in_msg_body~load_uint(64);
+
+    throw_unless(error::invalid_A, future_A <= MAX_A);
+    throw_unless(error::invalid_A_future_time, future_A_time > now());
+
+    int initial_A = calc_A_precise();
+    int future_A_p = future_A * A_PRECISION;
+
+    if(future_A_p < initial_A) {
+        throw_unless(error::invalid_A, future_A_p * MAX_A_CHANGE >= initial_A);
+    } else {
+        throw_unless(error::invalid_A, future_A_p <= initial_A * MAX_A_CHANGE);
+    }
+
+    storage::initial_A = initial_A;
+    storage::future_A = future_A_p;
+    storage::initial_A_time = now();
+    storage::future_A_time = future_A_time;
+
+    save_storage();
+}
+
+{-TLB stop_update_A#0x600df564 query_id:uint64 = StopUpdateAMsgBody; -}
+() handle_stop_update_A(slice sender_address) impure inline {
+    ensure_authorized_caller(sender_address);
+
+    int initial_A = calc_A_precise();
+
+    storage::initial_A = initial_A;
+    storage::future_A = initial_A;
+    storage::initial_A_time = now();
+    storage::future_A_time = now();
+
+    save_storage();
+}
+
+() handle_update_rates_manager(slice sender_address, slice in_msg_body) impure inline {
+    ensure_authorized_caller(sender_address);
+
+    storage::oracle_address = in_msg_body~load_msg_addr();
+
+    save_storage();
+}
+
+() handle_update_rates(slice sender_address, slice in_msg_body) impure inline {
+    ensure_oracle_caller(sender_address);
+
+    storage::rates = deserialize_pool_rates(in_msg_body~load_dict());
+
+    throw_unless(error::invalid_rates, storage::rates.tlen() == storage::n_coins);
+
+    save_storage();
+}
+
+{-TLB withdraw_admin_fees#0x9f50769f query_id:uint64 token:Token to:MsgAddress amount:(VarUInteger 16) = WithdrawAdminFeesMsgBody; -}
+() handle_withdraw_admin_fees(slice sender_address, int query_id, slice in_msg_body) impure inline {
+    ensure_authorized_caller(sender_address);
+
+    slice token = in_msg_body~load_token();
+    slice to = in_msg_body~load_msg_addr();
+    force_chain(to);
+
+    int amount = in_msg_body~load_coins();
+
+    int token_index = find_token_index(token);
+    throw_if(error::unknown_token, token_index == -1);
+
+    int balance = storage::admin_fee_balances.at(token_index);
+
+    if((amount > 0) & (balance >= amount)) {
+        storage::admin_fee_balances~tset(token_index, balance - amount);
+
+        send_payout(query_id, token, to, amount, 0, null(), CARRY_REMAINING_GAS);
+
+        save_storage();
+    }
+}

@@ -1,0 +1,59 @@
+
+#include "./assets.func";
+{-TLB
+    Storage
+
+    liquidty_depososit_jetton$00 jetton_master_address:MsgAddress balance:(VarUInteger 16) next_asset:(Maybe ^LiquidityDepositStorage) = LiquidityDepositAsset;
+    liquidity_deposit_native$01 balance:(VarUInteger 16) next_asset:(Maybe ^LiquidityDepositStorage) = LiquidityDepositAsset;
+
+    $_ factory_address:MsgAddress contract_type:(## 8)
+       owner_address:MsgAddress pool_address:MsgAddress
+       assets:(Maybe ^LiquidityDepositAssets) = LiquidityDepositStorage;
+-}
+
+global slice storage::factory_address;
+global int storage::contract_type;
+global slice storage::owner_address;
+global slice storage::pool_address;
+
+global cell storage::assets;
+
+;; tokens are slices of type Token
+global tuple storage::tokens;
+global tuple storage::balances;
+
+() load_storage() impure inline {
+    slice ds = get_data().begin_parse();
+
+    storage::factory_address = ds~load_msg_addr();
+    storage::contract_type = ds~load_uint(8);
+    storage::owner_address = ds~load_msg_addr();
+    storage::pool_address = ds~load_msg_addr();
+
+    storage::assets = ds~load_maybe_ref();
+
+    ;; jettons and battons 🥖
+    (
+        storage::tokens,
+        storage::balances
+    ) = deserialize_liquidity_deposit_assets(storage::assets);
+}
+
+() save_storage() impure inline_ref {
+    storage::assets = serialize_liquidity_deposit_assets(
+        storage::tokens,
+        storage::balances
+    );
+
+    set_data(
+        begin_cell()
+            .store_slice(storage::factory_address)
+            .store_uint(storage::contract_type, 8)
+            .store_slice(storage::owner_address)
+            .store_slice(storage::pool_address)
+            .store_maybe_ref(
+                storage::assets
+            )
+        .end_cell()
+    );
+}

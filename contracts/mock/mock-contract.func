@@ -1,0 +1,38 @@
+#include "../lib/stdlib.func";
+#include "../lib/messages.func";
+#include "../lib/error-codes.func";
+#include "../lib/op-codes.func";
+
+{-TLB
+  op::forward_msg query_id:uint64 fwd_recipient:MsgAddress fwd_msg_payload:Cell
+-}
+() recv_internal(cell in_msg_full, slice in_msg_body) {
+    slice cs = in_msg_full.begin_parse();
+    cs~load_uint(4);
+
+    int op = in_msg_body~load_op();
+    in_msg_body~load_query_id();
+
+    if(op == op::initialize) {
+        return ();
+    }
+
+    if(op == op::forward_msg) {
+        slice fwd_recipient = in_msg_body~load_msg_addr();
+        cell fwd_msg_payload = in_msg_body~load_ref();
+
+        var msg = begin_cell()
+            .store_msg_flag(msg_flag::non_bounceable)
+            .store_slice(fwd_recipient)
+            .store_coins(0)
+            .store_msgbody_prefix_ref(
+                fwd_msg_payload
+            );
+
+        send_raw_message(msg.end_cell(), CARRY_REMAINING_GAS);
+
+        return ();
+    }
+
+    return ();
+}

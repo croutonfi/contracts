@@ -1,0 +1,295 @@
+#include "./lib/stdlib.func";
+#include "./lib/op-codes.func";
+#include "./lib/params.func";
+#include "./lib/messages.func";
+#include "./lib/common.func";
+#include "./lib/tokens.func";
+#include "./lib/gas.func";
+#include "./lib/upgrades.func";
+
+#include "./factory/storage.func";
+#include "./factory/getters.func";
+
+#include "./lib/ownable.func";
+
+{-TLB deploy_pool#0xaee6a3c6 query_id:uint64 assets:^Cell rates:^(Rates) content:^Cell A:uint32 fee:uint64 admin_fee:uint64  -}
+() deploy_pool(int query_id, slice in_msg_body) impure inline {
+    cell assets = in_msg_body~load_ref();
+    cell rates = in_msg_body~load_dict();
+    slice rates_manager = in_msg_body~load_msg_addr();
+    cell content = in_msg_body~load_ref();
+    int A = in_msg_body~load_uint(32);
+    int fee = in_msg_body~load_uint(64);
+    int admin_fee = in_msg_body~load_uint(64);
+
+    cell state_init = calc_pool_state_init(my_address(), calc_pool_proof(assets));
+    slice pool_address = calc_address(state_init);
+
+    cell msg_body = begin_cell()
+        .store_op(op::initialize)
+        .store_query_id(query_id)
+        .store_ref(storage::pool_code)
+        .store_maybe_ref(
+            begin_cell()
+                .store_op(op::init_pool)
+                .store_query_id(query_id)
+                .store_uint(A, 32)
+                .store_uint(fee, 64)
+                .store_uint(admin_fee, 64)
+                .store_dict(rates)
+                .store_slice(rates_manager)
+                .store_ref(storage::shares_wallet_code)
+                .store_ref(content)
+            .end_cell()
+        )
+        .end_cell();
+
+    builder msg = begin_cell()
+        .store_msg_flag(msg_flag::bounceable)
+        .store_slice(pool_address)
+        .store_coins(0)
+        .store_msgbody_prefix_stateinit(state_init, msg_body);
+
+    send_raw_message(msg.end_cell(), CARRY_REMAINING_GAS);
+}
+
+() deploy_vault(int query_id, slice in_msg_body) impure inline {
+    slice token = in_msg_body~load_token();
+    (int token_type, slice jetton_master_address) = parse_token(token);
+
+    if(token_type == token_type::jetton) {
+        force_chain(jetton_master_address);
+    }
+
+    cell state_init = calc_vault_state_init(
+        my_address(), calc_vault_proof(token)
+    );
+    slice vault_address = calc_address(state_init);
+
+    cell code = (token_type == token_type::jetton) ? storage::jetton_vault_code : storage::native_vault_code;
+
+    cell msg_body = begin_cell()
+        .store_op(op::initialize)
+        .store_query_id(query_id)
+        .store_ref(code)
+        .store_maybe_ref(
+            begin_cell()
+                .store_op(op::init_vault)
+                .store_query_id(query_id)
+            .end_cell()
+        )
+        .end_cell();
+
+    builder msg = begin_cell()
+        .store_msg_flag(msg_flag::bounceable)
+        .store_slice(vault_address)
+        .store_coins(0)
+        .store_msgbody_prefix_stateinit(state_init, msg_body);
+
+    send_raw_message(msg.end_cell(), CARRY_REMAINING_GAS);
+}
+
+() send_deposit_notification(
+    int query_id,
+    slice pool_address,
+    slice owner_address,
+    slice token,
+    int token_amount,
+    int min_shares_out,
+    int expected_tokens_count
+) impure inline {
+    cell state_init = calc_liquidity_deposit_state_init(
+        my_address(), calc_liquidity_deposit_proof(owner_address, pool_address)
+    );
+
+    {-TLB
+        deposit_notification#0xa6589976 query_id:uint64
+            token:Token amount:(VarUInteger 16) expected_tokens_count:uint8 min_shares_out:(VarUInteger 16)
+            DepositNotificationMsgBody;
+    -}
+    cell deposit_notification_body = begin_cell()
+        .store_op(op::deposit_notification)
+        .store_query_id(query_id)
+        .store_slice(token)
+        .store_coins(token_amount)
+        .store_uint(expected_tokens_count, 8)
+        .store_coins(min_shares_out)
+        .end_cell();
+
+    cell msg_body = begin_cell()
+        .store_op(op::initialize)
+        .store_query_id(query_id)
+        .store_ref(storage::liquidity_deposit_code)
+        .store_maybe_ref(deposit_notification_body)
+        .end_cell();
+
+    builder msg = begin_cell()
+        .store_msg_flag(msg_flag::bounceable)
+        .store_slice(
+            calc_address(state_init)
+        )
+        .store_coins(0)
+        .store_msgbody_prefix_stateinit(state_init, msg_body);
+
+    send_raw_message(msg.end_cell(), CARRY_REMAINING_GAS);
+}
+
+{-TLB
+    add_liquidity_additional_params# expected_tokens_count:uint8 min_shares_out:(VarUInteger 16) = AddLiquidityAdditionalParams
+    add_liquidity_notification#0x406d7624 query_id:uint64
+        token:Token amount:(VarUInteger 16)
+        pool_address:MsgAddress owner_address:MsgAddress params:(^AddLiquidityAdditionalParams) = AddLiquidityNotificationMsgBody;
+    -}
+() handle_add_liquiditiy(int query_id, slice sender_address, slice in_msg_body) impure inline {
+    slice token = in_msg_body~load_token();
+    (int token_type, slice jetton_master_address) = parse_token(token);
+
+    if(token_type == token_type::jetton) {
+        force_chain(jetton_master_address);
+    }
+
+    slice vault_address = calc_address(
+        calc_vault_state_init(
+            my_address(), calc_vault_proof(token)
+        )
+    );
+    throw_unless(error::unauthorized, equal_slice_bits(vault_address, sender_address));
+
+    int jetton_amount = in_msg_body~load_coins();
+    slice pool_address = in_msg_body~load_msg_addr();
+    force_chain(pool_address);
+
+    slice owner_address = in_msg_body~load_msg_addr();
+    force_chain(owner_address);
+
+    slice params = in_msg_body~load_ref().begin_parse();
+
+    int expected_tokens_count = params~load_uint(8);
+    int min_shares_out = params~load_coins();
+
+    params.end_parse();
+
+    send_deposit_notification(
+        query_id,
+        pool_address,
+        owner_address,
+        token,
+        jetton_amount,
+        min_shares_out,
+        expected_tokens_count
+    );
+}
+
+{-TLB admin_action# query_id:uint64 recipient:MsgAddress coins:(VarUInteger 16) fwd_action_payload:^Cell = AdminAction; -}
+() handle_admin_action(slice in_msg_body, int msg_value) impure inline {
+    slice recipient = in_msg_body~load_msg_addr();
+    force_chain(recipient);
+
+    int coins = in_msg_body~load_coins();
+    throw_unless(error::not_enough_tons, msg_value >= coins);
+
+    cell fwd_msg_payload = in_msg_body~load_ref();
+
+    var msg = begin_cell()
+        .store_msg_flag(msg_flag::non_bounceable)
+        .store_slice(recipient)
+        .store_coins(coins)
+        .store_msgbody_prefix_ref(
+            fwd_msg_payload
+        );
+
+    send_raw_message(msg.end_cell(), CARRY_REMAINING_GAS);
+}
+
+{-TLB update_code#0x20ccb55b query_id:uint64 contract_type:(## 8) code:^cell = UpdateCodeMsgBody; -}
+() handle_update_code(slice in_msg_body) impure inline {
+    int contract_type = in_msg_body~load_uint(8);
+
+    cell code = in_msg_body~load_ref();
+
+    if(contract_type == type::vault) {
+        ;;vault has two codes, first being jetton vault code, second being native vault code
+        slice cs = code.begin_parse();
+
+        storage::jetton_vault_code = cs~load_ref();
+        storage::native_vault_code = cs~load_ref();
+
+        cs.end_parse();
+    }
+
+    if(contract_type == type::pool) {
+        storage::pool_code = code;
+    }
+
+    if(contract_type == type::liquidity_deposit) {
+        storage::liquidity_deposit_code = code;
+    }
+
+    save_storage();
+}
+
+() recv_internal(int my_balance, int msg_value, cell in_msg_full, slice in_msg_body) impure {
+    if (in_msg_body.slice_empty?()) { ;; ignore empty messages
+        return ();
+    }
+    slice cs = in_msg_full.begin_parse();
+
+    int flags = cs~load_uint(4);
+    if (flags & 1) { ;; ignore all bounced messages
+        return ();
+    }
+    slice sender_address = cs~load_msg_addr();
+    force_chain(sender_address);
+
+    int op = in_msg_body~load_op();
+    int query_id = in_msg_body~load_query_id();
+
+    load_storage();
+
+    if (op == op::add_liquidity_notification) {
+        handle_add_liquiditiy(query_id, sender_address, in_msg_body);
+
+        return ();
+    }
+
+    ;; all actions beneath are ADMIN ONLY
+    throw_unless(error::caller_not_authorized, equal_slice_bits(sender_address, storage::owner_address));
+
+    if (op == op::deploy_vault) {
+        deploy_vault(query_id, in_msg_body);
+
+        return ();
+    }
+
+    if (op == op::deploy_pool) {
+        deploy_pool(query_id, in_msg_body);
+
+        return ();
+    }
+
+    if (op == op::upgrade) {
+        handle_upgrade(in_msg_body);
+
+        return ();
+    }
+
+    if (op == op::admin_action) {
+        handle_admin_action(in_msg_body, msg_value);
+
+        return ();
+    }
+
+    if (op == op::update_code) {
+        handle_update_code(in_msg_body);
+
+        return ();
+    }
+
+    if (op == op::transfer_ownership) {
+        handle_transfer_ownership(in_msg_body);
+
+        return ();
+    }
+
+    throw(error::unknown_op);
+}

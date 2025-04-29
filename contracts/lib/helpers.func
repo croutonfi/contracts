@@ -1,0 +1,12 @@
+int index_of_slice_in_tuple(tuple tpl, slice el) {
+    int idx = 0;
+    repeat(tlen(tpl)) {
+        if (equal_slice_bits(el, tpl.at(idx))) {
+            return idx;
+        }
+
+        idx = idx + 1;
+    }
+
+    return -1;
+}

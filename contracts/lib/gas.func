@@ -1,0 +1,391 @@
+const int STORAGE_FEE_DEPLOYMENT_DURATION  = 60 * 60 * 24 * 365 * 5; ;; 5 years in seconds
+const int STORAGE_FEE_DURATION  = 60 * 60 * 24 * 365 * 1; ;; 1 years in seconds
+
+;; those are approximate
+const int storage_cells::jetton_wallet = 15;
+const int storage_bits::jetton_wallet = 8184;
+
+const int storage_cells::factory = 229;
+const int storage_bits::factory = 82863;
+
+const int storage_cells::vault = 40;
+const int storage_bits::vault = 12276;
+
+const int storage_cells::liquidity_deposit = 20;
+const int storage_bits::liquidity_deposit = 6138;
+
+const int storage_cells::pool = 136;
+const int storage_bits::pool = 55242;
+
+int jetton_wallet_storage_fee() inline_ref {
+    return get_storage_fee(storage_cells::jetton_wallet, storage_bits::jetton_wallet, STORAGE_FEE_DEPLOYMENT_DURATION, false);
+}
+
+int factory_storage_fee() inline_ref {
+    return get_storage_fee(storage_cells::factory, storage_bits::factory, STORAGE_FEE_DURATION, false);
+}
+
+int vault_storage_fee() inline_ref {
+    return get_storage_fee(storage_cells::vault, storage_bits::vault, STORAGE_FEE_DURATION, false);
+}
+
+int liquidity_deposit_storage_fee() inline_ref {
+    return get_storage_fee(storage_cells::liquidity_deposit, storage_bits::liquidity_deposit, STORAGE_FEE_DURATION, false);
+}
+
+;; current values are for a pool with 3 assets
+int pool_storage_fee() inline_ref {
+    return get_storage_fee(storage_cells::pool, storage_bits::pool, STORAGE_FEE_DURATION, false);
+}
+
+;;compute
+const int gas::transfer = 10000;
+const int gas::internal_transfer = 9000;
+const int gas::excesses = 10000;
+const int gas::payout = 19000;
+const int gas::update_reserves = 53000;
+const int gas::swap_notification = 63000;
+const int gas::peer_swap = 74000;
+const int gas::add_liquidity_notification = 19000;
+const int gas::deposit_notification = 8000;
+const int gas::deposit_all = 11000;
+const int gas::transfer_swap = 10000;
+const int gas::transfer_notification_swap = 11000;
+const int gas::internal_transfer_swap = 12000;
+const int gas::transfer_add_liquidity = 10000;
+const int gas::internal_transfer_add_liquidity = 12000;
+const int gas::transfer_notification_add_liquidity = 12000;
+const int gas::deploy_liquidity_deposit = 4000;
+const int gas::mint_shares_internal_transfer = 9000;
+const int gas::burn_lp = 6000;
+const int gas::burn_lp_notification = 75000;
+const int gas::payout_transfer = 10000;
+const int gas::payout_internal_transfer = 9000;
+
+;; fwd
+const int msg_cells::transfer = 1;
+const int msg_bits::transfer = 1023;
+
+const int msg_cells::internal_transfer = 18;
+const int msg_bits::internal_transfer = 9207;
+
+const int msg_cells::excesses = 1;
+const int msg_bits::excesses = 1023;
+
+const int msg_cells::payout = 4;
+const int msg_bits::payout = 2046;
+
+const int msg_cells::update_reserves = 4;
+const int msg_bits::update_reserves = 2046;
+
+const int msg_cells::swap_notification = 4;
+const int msg_bits::swap_notification = 2046;
+
+const int msg_cells::peer_swap = 6;
+const int msg_bits::peer_swap = 2046;
+
+const int msg_cells::add_liquidity_notification = 2;
+const int msg_bits::add_liquidity_notification = 1023;
+
+const int msg_cells::deposit_notification = 1;
+const int msg_bits::deposit_notification = 1023;
+
+const int msg_cells::deposit_all = 1;
+const int msg_bits::deposit_all = 1023;
+
+const int msg_cells::transfer_swap = 6;
+const int msg_bits::transfer_swap = 2046;
+
+const int msg_cells::transfer_notification_swap = 5;
+const int msg_bits::transfer_notification_swap = 2046;
+
+const int msg_cells::internal_transfer_swap = 22;
+const int msg_bits::internal_transfer_swap = 10230;
+
+const int msg_cells::transfer_add_liquidity = 3;
+const int msg_bits::transfer_add_liquidity = 1023;
+
+const int msg_cells::internal_transfer_add_liquidity = 19;
+const int msg_bits::internal_transfer_add_liquidity = 9207;
+
+const int msg_cells::transfer_notification_add_liquidity = 2;
+const int msg_bits::transfer_notification_add_liquidity = 1023;
+
+const int msg_cells::deploy_liquidity_deposit = 27;
+const int msg_bits::deploy_liquidity_deposit = 8184;
+
+const int msg_cells::mint_shares_internal_transfer = 18;
+const int msg_bits::mint_shares_internal_transfer = 9207;
+
+const int msg_cells::burn_lp = 5;
+const int msg_bits::burn_lp = 1023;
+
+const int msg_cells::burn_lp_notification = 5;
+const int msg_bits::burn_lp_notification = 1023;
+
+const int msg_cells::payout_transfer = 1;
+const int msg_bits::payout_transfer = 1023;
+
+const int msg_cells::payout_internal_transfer = 18;
+const int msg_bits::payout_internal_transfer = 9207;
+
+int jetton_swap_transfer_fee() inline {
+    int storage_fee = jetton_wallet_storage_fee();
+
+    int compute_fee = get_compute_fee(gas::transfer_swap, false);
+
+    ;; hence jettons use PAY_SEPARATELY flag
+    int fwd_bits = msg_bits::transfer_swap + msg_bits::transfer_notification_swap;
+    int fwd_cells = msg_cells::transfer_swap + msg_cells::transfer_notification_swap;
+
+    int fwd_fee = get_forward_fee(fwd_cells, fwd_bits, false);
+
+    return storage_fee + compute_fee + fwd_fee;
+}
+
+int jetton_add_liquidity_transfer_fee() inline {
+    int storage_fee = jetton_wallet_storage_fee();
+
+    int compute_fee = get_compute_fee(gas::transfer_add_liquidity, false);
+
+    ;; hence jettons use PAY_SEPARATELY flag
+    int fwd_bits = msg_bits::transfer_add_liquidity + msg_bits::transfer_notification_add_liquidity;
+    int fwd_cells = msg_cells::transfer_add_liquidity + msg_cells::transfer_notification_add_liquidity;
+
+    int fwd_fee = get_forward_fee(fwd_cells, fwd_bits, false);
+
+    return storage_fee + compute_fee + fwd_fee;
+}
+
+int vault_swap_fee() inline {
+    int storage_fee = vault_storage_fee() + pool_storage_fee() + jetton_wallet_storage_fee();
+
+    int compute_gas = gas::transfer_notification_swap
+      + gas::swap_notification
+      + gas::payout
+      + gas::transfer
+      + gas::internal_transfer
+      + gas::excesses * 2;  ;; two potenial excesses txs, for now
+
+    int compute_fee = get_compute_fee(compute_gas, false);
+
+    int fwd_bits = msg_bits::swap_notification
+      + msg_bits::payout
+      + msg_bits::transfer
+      + msg_bits::internal_transfer
+      + msg_bits::excesses * 2;  ;; two potenial excesses txs, for now
+
+    int fwd_cells = msg_cells::swap_notification
+      + msg_cells::payout
+      + msg_cells::transfer
+      + msg_cells::internal_transfer
+      + msg_cells::excesses * 2;  ;; two potenial excesses txs, for now
+
+  int fwd_fee = get_forward_fee(fwd_cells, fwd_bits, false);
+
+  return storage_fee + compute_fee + fwd_fee;
+}
+
+int payout_fee() inline {
+    int storage_fee = vault_storage_fee() + jetton_wallet_storage_fee();
+
+    int compute_gas = gas::payout
+        + gas::payout_transfer
+        + gas::payout_internal_transfer
+        + gas::excesses;
+
+    int compute_fee = get_compute_fee(compute_gas, false);
+
+    int fwd_bits = msg_bits::payout
+        + msg_bits::payout_transfer
+        + msg_bits::payout_internal_transfer
+        + msg_bits::excesses;
+
+    int fwd_cells = msg_cells::payout
+        + msg_cells::payout_transfer
+        + msg_cells::payout_internal_transfer
+        + msg_cells::excesses;
+
+    int fwd_fee = get_forward_fee(fwd_cells, fwd_bits, false);
+
+    return storage_fee + compute_fee + fwd_fee;
+}
+
+int payout_only_fee() inline {
+    return (
+           vault_storage_fee() +
+           get_compute_fee(gas::payout, false) +
+           get_forward_fee(msg_cells::payout, msg_bits::payout, false)
+    );
+}
+
+int excess_fee() inline {
+    int compute_gas = gas::excesses;
+
+    int compute_fee = get_compute_fee(compute_gas, false);
+
+    int fwd_bits = msg_bits::excesses;
+    int fwd_cells = msg_cells::excesses;
+
+    int fwd_fee = get_forward_fee(fwd_cells, fwd_bits, false);
+
+    return compute_fee + fwd_fee;
+}
+
+int liquidity_deposit_deploy_fee() inline {
+    int storage_fee = get_storage_fee(
+        storage_cells::liquidity_deposit,
+        storage_bits::liquidity_deposit,
+        STORAGE_FEE_DEPLOYMENT_DURATION,
+        false
+    );
+    int compute_fee = get_compute_fee(gas::deploy_liquidity_deposit, false);
+    int fwd_fee = get_forward_fee(msg_cells::deploy_liquidity_deposit, msg_bits::deploy_liquidity_deposit, false);
+
+    return storage_fee + compute_fee + fwd_fee;
+}
+
+int vault_add_liquidity_only_fee() inline {
+    return get_store_fees() + get_compute_fee(gas::transfer_notification_add_liquidity, false) + get_forward_fee(msg_cells::transfer_notification_add_liquidity, msg_bits::transfer_add_liquidity, false);
+}
+
+int vault_add_liquidity_fee() inline {
+    int storage_fee = jetton_wallet_storage_fee() + vault_storage_fee() + factory_storage_fee() + liquidity_deposit_storage_fee() + pool_storage_fee() + jetton_wallet_storage_fee();
+
+    int compute_gas = gas::transfer_notification_add_liquidity
+        + gas::excesses * 2
+        + gas::add_liquidity_notification
+        + gas::deploy_liquidity_deposit
+        + gas::deposit_notification
+        + gas::update_reserves
+        + gas::mint_shares_internal_transfer;
+
+    int compute_fee = get_compute_fee(compute_gas, false);
+
+    int fwd_bits = msg_bits::add_liquidity_notification
+        + msg_bits::deploy_liquidity_deposit
+        + msg_bits::deposit_notification
+        + msg_bits::excesses * 2
+        + msg_bits::update_reserves
+        + msg_bits::mint_shares_internal_transfer;
+
+    int fwd_cells = msg_cells::add_liquidity_notification
+        + msg_cells::deploy_liquidity_deposit
+        + msg_cells::deposit_notification
+        + msg_cells::excesses * 2
+        + msg_cells::update_reserves
+        + msg_cells::mint_shares_internal_transfer;
+
+    int fwd_fee = get_forward_fee(fwd_cells, fwd_bits, false);
+
+    return storage_fee + compute_fee + fwd_fee + payout_fee();
+}
+
+int deposit_all_fee() inline {
+    int storage_fee = liquidity_deposit_storage_fee() + pool_storage_fee() + jetton_wallet_storage_fee();
+
+    int compute_gas = gas::deposit_all
+        + gas::update_reserves
+        + gas::mint_shares_internal_transfer;
+
+    int compute_fee = get_compute_fee(compute_gas, false);
+
+    int fwd_bits = msg_bits::deposit_all
+        + msg_bits::update_reserves
+        + msg_bits::mint_shares_internal_transfer;
+
+    int fwd_cells = msg_cells::deposit_all
+        + msg_cells::update_reserves
+        + msg_cells::mint_shares_internal_transfer;
+
+    int fwd_fee = get_forward_fee(fwd_cells, fwd_bits, false);
+
+    return storage_fee + compute_fee + fwd_fee;
+}
+
+int update_reserves_fee() inline {
+    int storage_fee = pool_storage_fee();
+
+    int compute_gas = gas::update_reserves
+        + gas::mint_shares_internal_transfer;
+
+    int compute_fee = get_compute_fee(compute_gas, false);
+
+    int fwd_bits = msg_bits::update_reserves
+        + msg_bits::mint_shares_internal_transfer;
+
+    int fwd_cells = msg_cells::update_reserves
+        + msg_cells::mint_shares_internal_transfer;
+
+    int fwd_fee = get_forward_fee(fwd_cells, fwd_bits, false);
+
+    return storage_fee + compute_fee + fwd_fee + payout_fee();
+}
+
+int deposit_notification_fee() inline {
+    int storage_fee = get_storage_fee(
+        storage_cells::liquidity_deposit,
+        storage_bits::liquidity_deposit,
+        STORAGE_FEE_DURATION,
+        false
+    );
+    int compute_fee = get_compute_fee(gas::deposit_notification, false);
+    int fwd_fee = get_forward_fee(msg_cells::deposit_notification, msg_bits::deposit_notification, false);
+
+    return (storage_fee + compute_fee + fwd_fee) + update_reserves_fee();
+}
+
+int mint_shares_fee() inline {
+    int storage_fee = jetton_wallet_storage_fee();
+
+    int compute_gas = gas::mint_shares_internal_transfer;
+    int compute_fee = get_compute_fee(compute_gas, false);
+
+    int fwd_bits = msg_bits::mint_shares_internal_transfer;
+    int fwd_cells = msg_cells::mint_shares_internal_transfer;
+
+    int fwd_fee = get_forward_fee(fwd_cells, fwd_bits, false);
+
+    return storage_fee + compute_fee + fwd_fee;
+}
+
+int update_reserves_only_fee() inline {
+    return get_compute_fee(gas::update_reserves, false) +
+          get_forward_fee(msg_cells::update_reserves, msg_bits::update_reserves, false);
+}
+
+int burn_lp_pool_fee(int n) inline {
+    int storage_fee = pool_storage_fee();
+
+    int compute_gas = gas::burn_lp_notification;
+
+    int compute_fee = get_compute_fee(compute_gas, false);
+
+    int fwd_bits = msg_bits::burn_lp_notification;
+
+    int fwd_cells = msg_cells::burn_lp_notification;
+
+    int fwd_fee = get_forward_fee(fwd_cells, fwd_bits, false);
+
+    return (storage_fee + compute_fee + fwd_fee) + payout_fee() * n;
+}
+
+int burn_lp_fee(int n) inline {
+    int storage_fee = jetton_wallet_storage_fee();
+
+    int compute_gas = gas::burn_lp;
+    int compute_fee = get_compute_fee(gas::burn_lp, false);
+
+    int fwd_bits = msg_bits::burn_lp;
+    int fwd_cells = msg_cells::burn_lp;
+
+    int fwd_fee = get_forward_fee(fwd_cells, fwd_bits, false);
+
+    return (storage_fee + compute_fee + fwd_fee) + burn_lp_pool_fee(n);
+}
+
+;; Jettons discoverable smart contract
+
+;; 6905(computational_gas_price) * 1000(cur_gas_price) = 6905000
+;; ceil(6905000) = 10000000 ~= 0.01 TON
+const int PROVIDE_ADDRESS_GAS_CONSUMPTION = 10000000;

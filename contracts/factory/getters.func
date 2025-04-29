@@ -1,0 +1,72 @@
+;; owner
+(slice) get_owner_address() method_id {
+    load_storage();
+
+    return storage::owner_address;
+}
+
+(cell, cell, cell, cell, cell) get_code() method_id {
+    load_storage();
+
+    return (
+        storage::jetton_vault_code,
+        storage::native_vault_code,
+        storage::pool_code,
+        storage::liquidity_deposit_code,
+        storage::shares_wallet_code
+    );
+}
+
+;; addresses
+
+(slice) get_liquidity_deposit_addr(slice owner_address, slice pool_address) method_id {
+    return calc_address(
+        calc_liquidity_deposit_state_init(
+            my_address(),
+            calc_liquidity_deposit_proof(
+                owner_address,
+                pool_address
+            )
+        )
+    );
+}
+
+(slice) get_vault_addr(slice token) method_id {
+    return calc_address(
+        calc_vault_state_init(
+            my_address(), calc_vault_proof(token)
+        )
+    );
+}
+
+
+(slice) get_pool_addr(cell assets) method_id {
+    return calc_address(
+        calc_pool_state_init(
+            my_address(), calc_pool_proof(assets)
+        )
+    );
+}
+
+;; gas
+(int, int) get_swap_fee() method_id {
+    return (
+        jetton_swap_transfer_fee(),
+        vault_swap_fee()
+   );
+}
+
+(int, int) get_add_liquidity_fee() method_id {
+    return (
+        jetton_add_liquidity_transfer_fee(),
+        vault_add_liquidity_fee()
+    );
+}
+
+int get_deposit_all_fee() method_id {
+    return deposit_all_fee();
+}
+
+int get_burn_lp_fee(int n) method_id {
+    return burn_lp_fee(n);
+}

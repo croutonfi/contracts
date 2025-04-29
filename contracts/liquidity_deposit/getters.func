@@ -1,0 +1,12 @@
+(slice, int, slice, slice, tuple, tuple) get_liquidity_deposit_data() method_id {
+    load_storage();
+
+    return (
+        storage::factory_address,
+        storage::contract_type,
+        storage::owner_address,
+        storage::pool_address,
+        storage::tokens,
+        storage::balances
+    );
+}

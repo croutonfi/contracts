@@ -1,0 +1,157 @@
+(int, int, slice, cell, cell) get_jetton_data() method_id {
+    load_storage();
+
+    return (storage::total_supply, -1, storage::factory_address, storage::content, storage::shares_wallet_code);
+}
+
+slice get_wallet_address(slice owner_address) method_id {
+    load_storage();
+
+    return calc_user_wallet(owner_address, my_address(), storage::shares_wallet_code);
+}
+
+
+(slice, int, cell, cell, int, int, int, int, slice) get_pool_data() method_id {
+    load_storage();
+
+    return (
+        storage::factory_address,
+        storage::contract_type,
+        serialize_pool_assets(storage::tokens, storage::precisions, storage::balances, storage::admin_fee_balances),
+        serialize_pool_rates(storage::rates),
+        calc_A_precise() / A_PRECISION,
+        storage::fee,
+        storage::admin_fee,
+        storage::total_supply,
+        storage::oracle_address
+    );
+}
+
+int get_n_coins() method_id {
+    load_storage();
+
+    return storage::n_coins;
+}
+
+tuple get_balances() method_id {
+    load_storage();
+
+    return storage::balances;
+}
+
+tuple get_rates() method_id {
+    load_storage();
+
+    return storage::rates;
+}
+
+tuple get_admin_fee_balances() method_id {
+    load_storage();
+
+    return storage::admin_fee_balances;
+}
+
+int get_total_supply() method_id {
+    load_storage();
+
+    return storage::total_supply;
+}
+
+int get_A_precise() method_id {
+    load_storage();
+
+    return calc_A_precise();
+}
+
+int get_A() method_id {
+    load_storage();
+
+    return calc_A_precise() / A_PRECISION;
+}
+
+int get_virtual_price() method_id {
+    load_storage();
+
+    int D = calc_D(calc_xp(), calc_A_precise());
+
+    return D * PRECISION / storage::total_supply;
+}
+
+int get_calc_token_amount(tuple amounts, int is_deposit) method_id {
+    load_storage();
+
+    tuple old_balances = storage::balances;
+
+    int amp = calc_A_precise();
+    int D0 = calc_D_mem(old_balances, amp);
+
+    tuple new_balances = storage::balances;
+
+    var i = 0;
+    repeat(storage::n_coins) {
+        new_balances~tset(
+            i,
+            new_balances.at(i) + amounts.at(i)
+        );
+
+        i += 1;
+    }
+
+    int D1 = calc_D_mem(new_balances, amp);
+    throw_unless(error::invariant_is_less_than_expected, D1 > D0);
+
+    int D2 = D1;
+    int shares_amount = 0;
+
+    if (storage::total_supply > 0) {
+        int fee_numerator = storage::fee * storage::n_coins / (4 * (storage::n_coins - 1));
+
+        int idx = 0;
+        repeat(storage::n_coins) {
+            int ideal_balance = D1 * old_balances.at(idx) / D0;
+            int new_balance = new_balances.at(idx);
+            int difference = ideal_balance > new_balance
+                ? ideal_balance - new_balance
+                : new_balance - ideal_balance;
+
+            int total_fee = fee_numerator * difference  / FEE_DENOMINATOR;
+            int admin_fee = total_fee * storage::admin_fee / FEE_DENOMINATOR;
+
+            storage::balances~tset(idx, new_balance - admin_fee);
+            storage::admin_fee_balances~tset(idx, storage::admin_fee_balances.at(idx) + admin_fee);
+            new_balances~tset(idx, new_balance - total_fee);
+
+            idx = idx + 1;
+        }
+
+        D2 = calc_D_mem(new_balances, amp);
+        int diff = is_deposit ? D2 - D0 : D0 - D2;
+
+        shares_amount = storage::total_supply * diff / D0;
+    } else {
+        shares_amount = D1;
+    }
+
+    return shares_amount;
+}
+
+int get_dy(int i, int j, int dx) method_id {
+    load_storage();
+
+    tuple xp = calc_xp();
+    tuple rates = storage::rates;
+
+    int x = xp.at(i) + (dx * rates.at(i) / PRECISION);
+    int y = calc_y(i, j, x, xp);
+    int dy = xp.at(j) - y - 1;
+    int fee = storage::fee * dy / FEE_DENOMINATOR;
+
+    return (dy - fee) * PRECISION / rates.at(j);
+}
+
+int get_calc_withdraw_one_coin(int token_amount, int i) method_id {
+    load_storage();
+
+    (int dy, _) = calc_withdraw_one_coin(token_amount, i);
+    return dy;
+}

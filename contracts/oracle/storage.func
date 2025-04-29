@@ -1,0 +1,38 @@
+global int storage::valid_signers_threshold;
+global int storage::valid_sources_threshold;
+global int storage::max_timestamp_delay;
+
+global cell storage::trusted_signers;
+global cell storage::certificate_trust_store;
+
+global cell storage::price_records;
+
+global slice storage::owner_address;
+
+() load_storage() impure inline {
+    slice ds = get_data().begin_parse();
+
+    storage::owner_address = ds~load_msg_addr();
+    storage::valid_signers_threshold = ds~load_uint(8);
+    storage::valid_sources_threshold = ds~load_uint(8);
+    storage::max_timestamp_delay = ds~load_uint(64);
+    storage::trusted_signers = ds~load_dict(); ;; pk => bool
+    storage::certificate_trust_store = ds~load_dict(); ;; bytes => bool
+    storage::price_records = ds~load_dict(); ;; hash => timestamp, price
+
+    ds.end_parse();
+}
+
+() save_storage() impure inline_ref {
+    set_data(
+        begin_cell()
+            .store_slice(storage::owner_address)
+            .store_uint(storage::valid_signers_threshold, 8)
+            .store_uint(storage::valid_sources_threshold, 8)
+            .store_uint(storage::max_timestamp_delay, 64)
+            .store_dict(storage::trusted_signers)
+            .store_dict(storage::certificate_trust_store)
+            .store_dict(storage::price_records)
+        .end_cell()
+    );
+}

@@ -1,0 +1,117 @@
+#include "./lib/stdlib.func";
+#include "./lib/params.func";
+#include "./lib/common.func";
+#include "./lib/op-codes.func";
+#include "./lib/error-codes.func";
+#include "./lib/messages.func";
+#include "./lib/helpers.func";
+#include "./lib/gas.func";
+#include "./lib/upgrades.func";
+
+#include "./vault/common.func";
+
+{-TLB
+    Storage
+    $_ factory_address:MsgAddress contract_type:(## 8) token:Token = NativeVaultStorage;
+-}
+
+() load_storage() impure inline {
+    slice ds = get_data().begin_parse();
+
+    storage::factory_address = ds~load_msg_addr();
+    storage::contract_type = ds~load_uint(8);
+    storage::token = ds~load_token();
+}
+
+() save_storage() impure inline {
+    set_data(
+        begin_cell()
+            .store_slice(storage::factory_address)
+            .store_uint(storage::contract_type, 8)
+            .store_slice(storage::token)
+        .end_cell()
+    );
+}
+
+#include "./vault/getters.func";
+
+() recv_internal(int my_balance, int msg_value, cell in_msg_full, slice in_msg_body) impure {
+    if (in_msg_body.slice_empty?()) { ;; ignore empty messages
+        return ();
+    }
+    slice cs = in_msg_full.begin_parse();
+
+    int flags = cs~load_uint(4);
+    if (flags & 1) { ;; ignore all bounced messages
+        return ();
+    }
+    slice sender_address = cs~load_msg_addr();
+    force_chain(sender_address);
+
+    int op = in_msg_body~load_op();
+    int query_id = in_msg_body~load_query_id();
+
+    load_storage();
+
+    if (op == op::init_vault) {
+        return ();
+    }
+
+    if (op == op::payout) {
+        {-TLB payout#0xd4374956 query_id:uint64 to:MsgAddress amount:(VarUInteger 16) proof:^Cell = PayoutMsgBody; -}
+        (slice to, int amount, cell fwd_payload) = parse_and_validate_payout(sender_address, in_msg_body);
+
+        send_tons(query_id, to, amount, fwd_payload);
+
+        return ();
+    }
+
+    if(op == op::add_liquidity) {
+        int amount = in_msg_body~load_coins();
+        msg_value -= amount;
+        throw_unless(error::not_enough_tons, msg_value >= vault_add_liquidity_fee());
+
+        msg_value -= vault_add_liquidity_only_fee(); ;; account for current message fees
+
+        handle_add_liquiditiy(query_id, sender_address, amount, in_msg_body, msg_value, IGNORE_ERRORS);
+
+        return ();
+    }
+
+    if(op == op::swap) {
+        int amount = in_msg_body~load_coins();
+        msg_value -= amount;
+
+        throw_unless(error::not_enough_tons, msg_value >= vault_swap_fee());
+
+        handle_swap(query_id, sender_address, amount, in_msg_body, msg_value, IGNORE_ERRORS);
+
+        return ();
+    }
+
+    if(op == op::withdraw_tons) {
+        throw_unless(error::caller_not_authorized, equal_slice_bits(sender_address, storage::factory_address));
+
+        handle_withdraw_tons(query_id, in_msg_body);
+
+        return ();
+    }
+
+    if(op == op::withdraw_jettons) {
+        throw_unless(error::caller_not_authorized, equal_slice_bits(sender_address, storage::factory_address));
+
+        handle_withdraw_jettons(query_id, in_msg_body);
+
+        return ();
+    }
+
+    if(op == op::upgrade) {
+        throw_unless(error::caller_not_authorized, equal_slice_bits(sender_address, storage::factory_address));
+
+        handle_upgrade(in_msg_body);
+
+        return ();
+    }
+
+    throw(error::unknown_op);
+}

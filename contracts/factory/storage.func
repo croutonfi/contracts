@@ -1,0 +1,47 @@
+{-TLB
+    Storage
+    $_ jetton_vault_code:^Cell native_vault_code:^Cell = VaultCodes;
+    $_ vault_codes:^VaultCodes pool_code:^Cell liquidity_deposit_code:^Cell shares_wallet_code:^Cell = FactoryState;
+-}
+global slice storage::owner_address;
+global cell storage::jetton_vault_code;
+global cell storage::native_vault_code;
+global cell storage::pool_code;
+global cell storage::liquidity_deposit_code;
+global cell storage::shares_wallet_code;
+
+() load_storage() impure inline {
+    slice ds = get_data().begin_parse();
+
+    storage::owner_address = ds~load_msg_addr();
+
+    cell vault_codes = ds~load_ref();
+
+    slice vs = vault_codes.begin_parse();
+    storage::jetton_vault_code = vs~load_ref();
+    storage::native_vault_code = vs~load_ref();
+    vs.end_parse();
+
+    storage::pool_code = ds~load_ref();
+    storage::liquidity_deposit_code = ds~load_ref();
+    storage::shares_wallet_code = ds~load_ref();
+
+    ds.end_parse();
+}
+
+() save_storage() impure inline_ref {
+    set_data(
+        begin_cell()
+            .store_slice(storage::owner_address)
+            .store_ref(
+                begin_cell()
+                    .store_ref(storage::jetton_vault_code)
+                    .store_ref(storage::native_vault_code)
+                .end_cell()
+            )
+            .store_ref(storage::pool_code)
+            .store_ref(storage::liquidity_deposit_code)
+            .store_ref(storage::shares_wallet_code)
+        .end_cell()
+    );
+}

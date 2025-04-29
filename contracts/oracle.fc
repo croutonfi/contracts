@@ -1,0 +1,250 @@
+#include "./lib/stdlib.func";
+#include "./lib/params.func";
+#include "./lib/common.func";
+#include "./lib/op-codes.func";
+#include "./lib/error-codes.func";
+#include "./lib/messages.func";
+
+#include "./oracle/storage.func";
+#include "./oracle/getters.func";
+
+#include "./lib/ownable.func";
+
+
+{-TLB
+    upgrade#dbfaf817 query_id:uint64 code:^cell = UpgradeMsgBody;
+-}
+() handle_upgrade(slice in_msg_body) impure inline {
+    set_code(in_msg_body~load_ref());
+}
+
+{-TLB
+    update_signer_threshold#ad71dfe3 query_id:uint64 new_threshold:uint8 = UpdateSignerThresholdMsgBody;
+-}
+() handle_update_signer_threshold(slice in_msg_body) impure inline {
+    storage::valid_signers_threshold = in_msg_body~load_uint(8);
+    in_msg_body.end_parse();
+    save_storage();
+}
+
+{-TLB
+    update_sources_threshold#211e2908 query_id:uint64 new_threshold:uint8 = UpdateSourcesThresholdMsgBody;
+-}
+() handle_update_sources_threshold(slice in_msg_body) impure inline {
+    storage::valid_sources_threshold = in_msg_body~load_uint(8);
+    in_msg_body.end_parse();
+    save_storage();
+}
+
+{-TLB
+    update_trusted_signers#e1ef9751 query_id:uint64 trusted_signers:(HashmapE 256 True) = UpdateTrustedSignersMsgBody;
+-}
+() handle_update_trusted_signers(slice in_msg_body) impure inline {
+    storage::trusted_signers = in_msg_body~load_dict();
+    in_msg_body.end_parse();
+    save_storage();
+}
+
+{-TLB
+    update_certificate_trust_store#ad0192b6 query_id:uint64 certificate_trust_store:(HashmapE 256 True) = UpdateCertificateTrustStoreMsgBody;
+-}
+() handle_update_certificate_trust_store(slice in_msg_body) impure inline {
+    storage::certificate_trust_store = in_msg_body~load_dict();
+    in_msg_body.end_parse();
+    save_storage();
+}
+
+{-TLB
+    update_max_timestamp_delay#376071e0 query_id:uint64 new_delay:uint64 = UpdateMaxTimestampDelayMsgBody;
+-}
+() handle_update_max_timestamp_delay(slice in_msg_body) impure inline {
+    storage::max_timestamp_delay = in_msg_body~load_uint(64);
+    in_msg_body.end_parse();
+    save_storage();
+}
+
+{-TLB
+    update_request_hash#bd8e229e query_id:uint64 asset_index:uint8 request_hash:uint256 is_added:int = UpdateRequestHashMsgBody;
+-}
+() handle_update_request_hash(slice in_msg_body) impure inline {
+    int asset_index = in_msg_body~load_uint(8);
+    int request_hash = in_msg_body~load_uint(256);
+    int is_added = in_msg_body~load_int(1);
+    in_msg_body.end_parse();
+
+    if (is_added) {
+        storage::price_records~udict_set_builder(8, asset_index, begin_cell().store_uint(request_hash, 256).store_uint(0, 64).store_coins(0));
+    } else {
+        storage::price_records~udict_delete?(8, asset_index);
+    }
+
+    save_storage();
+}
+
+{-TLB
+    send_price#af15cdc2 query_id:uint64 receiver_address:msg_address = SendPriceMsgBody;
+-}
+() handle_send_price(int query_id, slice in_msg_body) impure inline {
+    slice receiver_address = in_msg_body~load_msg_addr();
+    in_msg_body.end_parse();
+
+    cell prices = new_dict();
+
+    (int asset_index, slice price_data, int data_found) = storage::price_records.udict_get_min?(8);
+    while (data_found) {
+        int request_hash = price_data~load_uint(256);
+        int timestamp = price_data~load_uint(64);
+        int price = price_data~load_coins();
+        price_data.end_parse();
+
+        throw_unless(error::prices_expired, now() - timestamp <= storage::max_timestamp_delay);
+        prices~udict_set_builder(32, asset_index, begin_cell().store_uint(price, 128));
+
+        (asset_index, price_data, data_found) = storage::price_records.udict_get_next?(8, asset_index);
+    }
+
+    cell msg_body = begin_cell()
+        .store_op(op::update_rates)
+        .store_query_id(query_id)
+        .store_dict(prices)
+        .end_cell();
+
+    {-TLB
+        update_rates#x60f90a44 query_id:uint64 prices:(HashmapE 32 int) = UpdateRatesMsgBody;
+    -}
+    builder msg = begin_cell()
+        .store_msg_flag(msg_flag::non_bounceable)
+        .store_slice(receiver_address)
+        .store_coins(0)
+        .store_msgbody_prefix_ref(msg_body);
+
+    send_raw_message(msg.end_cell(), IGNORE_ERRORS | CARRY_REMAINING_GAS);
+}
+
+{-TLB
+    update_price#aaacc05b query_id:uint64 asset_index:uint8 signatures:(HashmapE 256 ^SignatureData) timestamp:uint64 request_hash:uint256 prices:(HashmapE 8 int) certificates:(HashmapE 256 True) = UpdatePriceFeedsMsgBody;
+    signature_data#_ sig:bits512 = SignatureData;
+-}
+() handle_update_price(slice in_msg_body) impure inline {
+    ;; 1. Check signatures
+    int asset_index = in_msg_body~load_uint(8);
+    cell signatures = in_msg_body~load_dict();
+    int valid_signer_counter = 0;
+
+    (int pk, slice sig_val, int sig_flag) = signatures.udict_get_min?(256);
+    while (sig_flag) {
+        slice sig = sig_val;
+
+        int data_hash = slice_hash(in_msg_body);
+
+        int is_sig_valid = check_signature(data_hash, sig, pk);
+
+        (_, int signer_flag) = storage::trusted_signers.udict_get?(256, pk);
+        if (signer_flag & is_sig_valid) {
+            valid_signer_counter += 1;
+        }
+
+        (pk, sig_val, sig_flag) = signatures.udict_get_next?(256, pk);
+    }
+
+    throw_unless(error::insufficient_signatures, valid_signer_counter >= storage::valid_signers_threshold);
+
+    ;; 2. Check request hash
+    int timestamp = in_msg_body~load_uint(64);
+    int request_hash = in_msg_body~load_uint(256);
+    int price = in_msg_body~load_coins();
+    cell certificates = in_msg_body~load_dict();
+    in_msg_body.end_parse();
+
+    (slice old_data, int data_found) = storage::price_records.udict_get?(8, asset_index);
+    throw_unless(error::invalid_asset_index, data_found);
+
+    int stored_request_hash = old_data~load_uint(256);
+
+    throw_unless(error::invalid_request_hash, stored_request_hash == request_hash);
+
+    ;; 3. Check certificates
+    int valid_sources_counter = 0;
+
+    (int cert_key, _, int cert_flag) = certificates.udict_get_min?(256);
+    while (cert_flag) {
+        (_, int cert_exists) = storage::certificate_trust_store.udict_get?(256, cert_key);
+        if (cert_exists) {
+            valid_sources_counter += 1;
+        }
+
+        (cert_key, _, cert_flag) = certificates.udict_get_next?(256, cert_key);
+    }
+
+    throw_unless(error::insufficient_sources, valid_sources_counter >= storage::valid_sources_threshold);
+
+    ;; 4. Update price feeds
+    int old_timestamp = old_data~load_uint(64);
+    if (old_timestamp < timestamp) {
+        storage::price_records~udict_set_builder(8, asset_index, begin_cell().store_uint(request_hash, 256).store_uint(timestamp, 64).store_coins(price));
+    }
+
+    save_storage();
+}
+
+() recv_internal(int my_balance, int msg_value, cell in_msg_full, slice in_msg_body) impure {
+    if (in_msg_body.slice_empty?()) { ;; ignore empty messages
+        return ();
+    }
+    slice cs = in_msg_full.begin_parse();
+
+    int flags = cs~load_uint(4);
+    if (flags & 1) { ;; ignore all bounced messages
+        return ();
+    }
+    slice sender_address = cs~load_msg_addr();
+    force_chain(sender_address);
+
+    int op = in_msg_body~load_op();
+    int query_id = in_msg_body~load_query_id();
+
+    load_storage();
+
+    if (op == op::send_price) {
+        handle_send_price(query_id, in_msg_body);
+        return ();
+    }
+
+    if (op == op::update_price) {
+        handle_update_price(in_msg_body);
+        return ();
+    }
+
+    if (equal_slice_bits(sender_address, storage::owner_address)) {
+        if (op == op::transfer_ownership) {
+            handle_transfer_ownership(in_msg_body);
+            return ();
+        }
+        if (op == op::update_signer_threshold) {
+            handle_update_signer_threshold(in_msg_body);
+            return ();
+        }
+        if (op == op::update_sources_threshold) {
+            handle_update_sources_threshold(in_msg_body);
+            return ();
+        }
+        if (op == op::update_trusted_signers) {
+            handle_update_trusted_signers(in_msg_body);
+            return ();
+        }
+        if (op == op::update_certificate_trust_store) {
+            handle_update_certificate_trust_store(in_msg_body);
+            return ();
+        }
+        if (op == op::update_request_hash) {
+            handle_update_request_hash(in_msg_body);
+            return ();
+        }
+        if (op == op::update_max_timestamp_delay) {
+            handle_update_max_timestamp_delay(in_msg_body);
+            return ();
+        }
+    }
+
+    throw(error::unknown_op);
+}
