@@ -1811,6 +1811,109 @@ describe('Swaps', () => {
         ).toBeTruthy();
     });
 
+    it('should properly handle a case when from_token == to_token', async () => {
+        const initialLiquidity = 1_000_000n;
+        const feeRaw = 0.003; // 0.3%
+        const fee = BigInt(Math.floor(feeRaw * Number(FEE_DENOMINATOR)));
+
+        const adminFee = FEE_DENOMINATOR / 2n; // half of fees go to admin
+
+        const [asset1, asset2, asset3] = [
+            calcAssetRateAndPrecision(8, 1),
+            calcAssetRateAndPrecision(9, 1),
+            calcAssetRateAndPrecision(13, 1),
+        ];
+
+        const { user, jettonMasters, vaults, pool } =
+            await deployPoolTestingSetup({
+                factory,
+                assetConfig: [
+                    {
+                        ...asset1,
+                        tokenType: TokenType.Jetton,
+                        initialLiquidity: initialLiquidity * asset1.one,
+                    },
+                    {
+                        ...asset2,
+                        tokenType: TokenType.Jetton,
+                        initialLiquidity: initialLiquidity * asset2.one,
+                    },
+                    {
+                        ...asset3,
+                        tokenType: TokenType.Jetton,
+                        initialLiquidity: initialLiquidity * asset3.one,
+                    },
+                ],
+                A: 200n,
+                adminFee,
+                fee,
+            });
+
+        const amountIn = 10_000n * asset1.one;
+
+        const fromJetton = jettonMasters[0];
+        const fromJettonVault = vaults[0];
+
+        await mintJettons(fromJetton, user.address, amountIn);
+
+        const fromJettonUserWallet = blockchain.openContract(
+            await fromJetton.getWallet(user.address),
+        );
+
+        const startingUserBalance =
+            await fromJettonUserWallet.getJettonBalance();
+
+        const fwdPayload = prepareSwapParameters(
+            [
+                {
+                    pool: pool.address,
+                    toToken: buildJettonToken(fromJetton.address),
+                    limit: 0n,
+                },
+            ],
+            {
+                recipient: user.address,
+                deadline: Math.floor(Date.now() / 1000) + 1000,
+                successPayload: null,
+                failPayload: null,
+            },
+        );
+
+        const [swapJettonFee, swapFee] = await factory.getSwapFee();
+        const transferResult = await fromJettonUserWallet.sendTransfer(
+            user.getSender(),
+            swapJettonFee + swapFee,
+            1000n,
+            fromJettonVault.address,
+            user.address,
+            Cell.EMPTY,
+            swapFee,
+            fwdPayload,
+        );
+
+        expect(transferResult.transactions).toHaveTransaction({
+            from: fromJettonVault.address,
+            to: pool.address,
+            op: Op.swap_notification,
+            success: true,
+        });
+
+        expect(transferResult.transactions).toHaveTransaction({
+            from: pool.address,
+            to: fromJettonVault.address,
+            op: Op.payout,
+            success: true,
+        });
+
+        expect(transferResult.transactions).not.toHaveTransaction({
+            success: false,
+        });
+
+        const newUserBalance = await fromJettonUserWallet.getJettonBalance();
+
+        expect(newUserBalance).toEqual(startingUserBalance);
+    });
+
     it('should be able to swap in pool with imbalanced reserves (1000:1)', async () => {
         const initialLiquidity = 1_000_000n;
         const feeRaw = 0.003;

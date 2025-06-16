@@ -183,10 +183,17 @@
 
     ;; the only place overflow can happen in case of extremely disbalanced pools
     int y = 0;
+    var has_overflow = false;
+
     try {
         y = calc_y(from_token_index, to_token_index, x, xp);
     } catch(_x, _n) {
-        y = 0;
+        has_overflow = true;
+    }
+
+    if (has_overflow) {
+        send_payout(query_id, from_token, sender, amount_in, 0, fail_payload, CARRY_REMAINING_GAS);
+        return ();
     }
 
     int amount_out = xp.at(to_token_index) - y - 1;
